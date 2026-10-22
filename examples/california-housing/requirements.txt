@@ -1,0 +1,3 @@
+# Versions intentionally left open: mlship pins them in the lock and warns about it.
+scikit-learn
+pandas
