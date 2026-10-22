@@ -1,5 +1,9 @@
 # Workspace root (virtual: it is not a package itself).
 # Members: packages/sdk, packages/runtime, packages/cli.
+[tool.uv]
+# Same uv everywhere: locally and in CI (setup-uv reads this field).
+required-version = "==0.13.5"
+
 [tool.uv.workspace]
 members = ["packages/*"]
 
