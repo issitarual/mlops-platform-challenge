@@ -1,0 +1,19 @@
+[project]
+name = "mlship"
+version = "0.1.0"
+description = "Host-side CLI: validate, train, register, promote and serve ML models."
+requires-python = ">=3.12"
+dependencies = [
+    "docker>=7.2.0",
+    "mlflow-skinny>=3.17.2",
+    "pydantic>=2.14.1",
+    "pydantic-settings>=2.16.1",
+    "typer>=0.27.3",
+]
+
+[project.scripts]
+mlship = "mlship.controllers.app:main"
+
+[build-system]
+requires = ["uv_build>=0.12.13,<0.13.0"]
+build-backend = "uv_build"
