@@ -218,3 +218,20 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---------------------------------------------------------------------------
+# mlship (project-specific)
+# ---------------------------------------------------------------------------
+# Local MLflow server data (SQLite + artifacts)
+.mlflow/
+mlruns/
+mlartifacts/
+# Datasets are downloaded, never committed
+/data/
+examples/*/data/
+# Tool working dirs and training outputs
+.mlship/
+outputs/
+# Local secrets (.env is already ignored above)
+.env.*
+!.env.example
