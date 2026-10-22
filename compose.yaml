@@ -1,0 +1,18 @@
+# Local MLflow tracking server + model registry.
+# Production equivalent: managed MLflow on SageMaker (see docs/architecture).
+services:
+  mlflow:
+    # Same version as the mlflow-skinny client in uv.lock (3.17.2).
+    # TODO(E3): confirm the tag is published and pin by digest (image@sha256:...).
+    image: ghcr.io/mlflow/mlflow:v3.17.2
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --artifacts-destination /mlflow/artifacts
+    ports:
+      - "127.0.0.1:5000:5000"  # bound to localhost only
+    volumes:
+      - ./.mlflow:/mlflow
+    restart: unless-stopped
