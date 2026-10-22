@@ -1,0 +1,62 @@
+# Workspace root (virtual: it is not a package itself).
+# Members: packages/sdk, packages/runtime, packages/cli.
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.16.0",
+    "mypy>=2.4.0",
+    "pre-commit>=4.7.0",
+    "pytest>=9.1.1",
+    "ruff>=0.17.1",
+]
+
+# ---------------------------------------------------------------------------
+# Tooling (single source of truth for the whole workspace)
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["packages/sdk/src", "packages/runtime/src", "packages/cli/src"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",  # pycodestyle
+    "F",       # pyflakes
+    "I",       # isort
+    "B",       # bugbear
+    "UP",      # pyupgrade
+    "N",       # pep8-naming
+    "S",       # bandit (security: shell=True, eval, hardcoded secrets...)
+    "SIM",     # simplify
+    "PTH",     # prefer pathlib
+    "RUF",     # ruff-specific
+    "TID",     # tidy imports (no relative imports)
+]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]  # assert is the point of a test
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+files = ["packages/sdk/src", "packages/runtime/src", "packages/cli/src", "tests"]
+
+[[tool.mypy.overrides]]
+# Third-party packages without type information.
+module = ["docker", "docker.*", "mlflow", "mlflow.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers", "--import-mode=importlib"]
+markers = [
+    "integration: needs Docker or the MLflow server",
+    "e2e: full init -> serve -> predict flow",
+]
