@@ -18,6 +18,23 @@ uv run mlship --help
 uv run pytest tests/unit
 ```
 
+## Treinar o exemplo
+
+Requer Docker em execução e alguns GB livres em disco (no Windows, no disco onde o
+Docker Desktop guarda os dados).
+
+```bash
+uv run scripts/download_california_housing.py
+uv run mlship train examples/california-housing --data examples/california-housing/data
+```
+
+Na primeira vez, a ferramenta resolve as dependências (`mlship.lock`) e constrói a
+imagem do ambiente, que é verificada arquivo por arquivo antes do uso; nas seguintes,
+reaproveita as duas. O treino roda num container sem
+rede, read-only e com limites, e o resultado fica em
+`examples/california-housing/.mlship/runs/<run_id>/`. Parâmetros vão com `-p`, por
+exemplo `-p seed=7 -p learning_rate=0.05`.
+
 ## Estrutura
 
 | Pacote | Onde roda | Papel |

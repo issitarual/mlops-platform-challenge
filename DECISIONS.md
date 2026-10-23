@@ -24,12 +24,12 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
 | [015](#adr-015--versionamento-de-ponta-a-ponta-e-de-modelos) | Versionamento de ponta a ponta e de modelos | Aceita |
 | [016](#adr-016--observabilidade-do-serving-e-referência-para-drift) | Observabilidade do serving e referência para drift | Aceita (dashboard P1, referência P2) |
 | [017](#adr-017--formatos-de-modelo-por-nível-de-confiança) | Formatos de modelo por nível de confiança | Aceita (níveis 1 e 2; nível 3 no desenho) |
+| [018](#adr-018--treino-isolado-e-contrato-com-o-runner) | Treino isolado e contrato com o runner | Aceita |
 
 **Decisões previstas**, registradas quando implementadas:
 
 | Tema | Épico |
 | --- | --- |
-| Isolamento do container de treino (sem rede, não-root, rootfs read-only, limites) | E2 |
 | Design da API de serving (schema pela assinatura, lote, erros, limites, health) | E4 |
 | Validação do projeto em dois níveis (erro e aviso), estática via AST | E5 |
 
@@ -166,8 +166,19 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
     lock, código-fonte do runtime e do sdk, digest da base, template do Dockerfile,
     versão do Python e plataforma. Usa o código-fonte, não o wheel, porque wheels podem
     carregar datas no arquivo e mudariam o hash a cada build;
+  - **imagem verificada antes do uso:** logo após o build, um self-check roda na
+    própria imagem, com o mesmo isolamento do treino. Ele confere o sha256 de cada
+    arquivo instalado contra o `RECORD` que o `pip` gravou e importa os módulos
+    nativos do runner. Se falhar, a imagem é apagada (nunca fica no cache) e o erro
+    lista os arquivos afetados. Imagens reaproveitadas do cache não são verificadas de
+    novo;
   - a mesma imagem serve ao treino e é a base da imagem de serving (ADR-007).
 - **Alternativas descartadas:**
+  - self-check como último `RUN` do Dockerfile: mais simples, mas verifica o
+    sistema de arquivos do build, não a imagem que vai ser usada;
+  - verificar também a cada uso do cache: protege contra adulteração local da imagem,
+    mas custa segundos a cada `train`; em produção isso é papel da assinatura e do
+    digest no registry (desenho);
   - tag igual só ao hash do lock: mudanças no runtime, na base ou no template
     reaproveitariam a imagem antiga do cache, um erro silencioso de reprodutibilidade;
   - sem cache: correto, mas minutos a cada `train`;
@@ -214,7 +225,13 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
   - **ponto em aberto:** as dependências do runtime têm hoje limites mínimos iguais às
     versões mais recentes (ex.: `pandas>=3.1.0`), herdados do `uv add`. Isso aumenta a
     chance de conflito com projetos que fixam versões mais antigas. Rever junto com a
-    validação de conflitos (E5).
+    validação de conflitos (E5);
+  - **achado (E2):** com o disco do host cheio, o Docker Desktop concluiu um build "com
+    sucesso" e deixou arquivos truncados na imagem (`typing_extensions.py` sem
+    `Sentinel`); o treino falhava com `ImportError` ou `SIGBUS`. É o motivo do
+    self-check. Verificado num ambiente com os pacotes do lock: o self-check passa no
+    ambiente íntegro e acusa o arquivo truncado. Custa alguns segundos, só em build
+    novo.
 
 ### ADR-006 — `mlflow-skinny` no runtime e modelo salvo offline
 
@@ -544,6 +561,70 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
     de código no nível 2) é contido pelo container de serving: sem credenciais, sem rede
     de saída, sistema de arquivos read-only, usuário não-root.
 
+### ADR-018 — Treino isolado e contrato com o runner
+
+- **Contexto:** o `train.py` é código não confiável e roda com os dados do cientista.
+  Tudo o que sai do container também é não confiável. A plataforma precisa conter o
+  que o código pode fazer e decidir, ela mesma, o que aceitar da saída.
+- **Decisão:**
+  - **antes do container:** validação do projeto (sintaxe e assinatura do `train` via
+    AST; `requirements.txt` sem `--index-url`, `-e`, `git+`, URLs ou caminhos locais;
+    diretório de dados existente e com arquivos). Erro bloqueia antes do lock; todos os
+    erros aparecem de uma vez. É o núcleo do E5, antecipado;
+  - **container:** `--network none`; rootfs read-only; `/tmp` em tmpfs (`nosuid,nodev`);
+    projeto, dados e `run.json` montados read-only; só `/output` gravável;
+    `--cap-drop ALL`; `no-new-privileges`; limites de CPU, memória (sem swap), processos
+    e tempo; perfil seccomp padrão do Docker. Nenhuma credencial, nenhuma variável do
+    host e nenhum socket do Docker entram: só as variáveis que a ferramenta define
+    (`PYTHONHASHSEED`, threads, `HOME=/tmp`, caminho do `run.json`);
+  - **usuário:** sempre não-root. Em Linux e macOS, o uid de quem roda a ferramenta (as
+    saídas pertencem a ele); no Windows ou com host root, o usuário 10001 da imagem;
+  - **contrato:** entrada `run.json` (parâmetros, seed, política de serialização),
+    saída `result.json` (status, todos os erros com código, mensagem e dica, métricas,
+    formato do modelo), `metrics.json` e `model/`. Os dois JSON têm `schema_version`;
+  - **o host não confia na saída:** o `train.py` roda no mesmo processo que o runner,
+    então pode reescrever o `result.json`. Por isso o arquivo é lido com limite de
+    tamanho, schema conferido e textos truncados, e nada é executado. Links simbólicos
+    são recusados (`result.json` e `MLmodel`), para que um link para um arquivo do host
+    não seja lido como saída. Timeout e falta de memória prevalecem sobre o que o
+    arquivo diz; sucesso exige código de saída 0 e modelo presente;
+  - **falhas legíveis:** processo morto por sinal vira `TRAIN_CRASHED` com o nome do
+    sinal (`SIGBUS`, `SIGSEGV`, `SIGKILL`…) e uma dica, e o erro avisa quando não houve
+    nenhuma saída de log. A tabela de sinais é a do Linux, fixa no código, porque o
+    host pode ser Windows. Recusa do Docker em criar o container (montagem não
+    compartilhada, por exemplo) vira erro com dica, sem stack trace; Ctrl+C remove o
+    container e sai com código 130. Falha ao salvar o modelo vira `MODEL_SAVE_FAILED`,
+    erro do projeto, e não "bug do mlship";
+  - **saídas por run:** `.mlship/runs/<run_id>/`, com `run.json` e `output/`. É a área
+    de trânsito antes do registro no MLflow (E3);
+  - **seed:** `seed` padrão 42, sempre repassada ao `train()` em `params`, para que o
+    código veja exatamente a seed usada.
+- **Alternativas descartadas:**
+  - configuração por variáveis de ambiente: tudo vira texto e aparece em
+    `docker inspect`; o JSON montado é o mesmo arquivo que vai para o manifesto;
+  - erros pelo código de saída e logs: só diria "falhou"; ler logs estruturados seria
+    frágil, porque o código do cientista escreve no mesmo stream;
+  - saídas numa pasta global ou temporária: misturaria projetos, ou perderia a saída
+    se o MLflow estivesse fora do ar;
+  - sandbox de kernel (gVisor, Firecracker): isolamento mais forte que containers, que
+    compartilham o kernel do host; fica no desenho de produção e em "Com mais tempo".
+- **Consequências:**
+  - **verificado (E2), com daemon Docker real e uma sonda estática dentro do
+    container:** sem rede; rootfs, projeto e dados read-only; `/tmp` gravável; usuário
+    não-root; só as variáveis definidas pela ferramenta; logs em tempo real; timeout
+    mata o container em cerca de 3 s; nenhum container sobra; e, via `docker inspect`,
+    `cap_drop ALL`, `no-new-privileges`, memória sem swap, limites de CPU e processos;
+  - os mesmos comportamentos, com a imagem Python real, são cobertos por testes de
+    integração (treino do exemplo, sonda de isolamento em Python, timeout) que rodam no
+    CI e localmente;
+  - sem rede, os dados precisam estar no disco antes do treino (ADR-010);
+  - `/tmp` não usa `noexec`, porque algumas bibliotecas executam arquivos temporários;
+  - o timeout é verificado a cada 0,5 s;
+  - **obrigatório no E3:** ao registrar o `model/` no MLflow, o host percorre o
+    diretório sem seguir links e recusa qualquer coisa que não seja arquivo ou
+    diretório comum. Senão, um link criado pelo código do cientista poderia levar um
+    arquivo do host para o artifact store.
+
 ---
 
 ## Fora de escopo
@@ -565,6 +646,8 @@ Itens fora do escopo do código; todos aparecem no desenho de arquitetura:
 - Snapshot dos dados por conteúdo a cada `train` (`.mlship/data/<hash>/` local, S3 em
   produção), para tornar reproduzíveis runs antigos mesmo após mudança nos dados (ADR-014).
 - Formatos nativos sem pickle para XGBoost, LightGBM e ONNX (nível 3 do ADR-017).
+- Docker rootless e perfil seccomp próprio para o container de treino; em produção,
+  sandbox de kernel (gVisor ou Firecracker) (ADR-018).
 - Estágio final da imagem em distroless ou Chainguard (ADR-005).
 - Atualização automática do digest da imagem base (Renovate ou job agendado que abre
   PR), com o Trivy validando a nova imagem (ADR-005).
@@ -579,3 +662,4 @@ Itens fora do escopo do código; todos aparecem no desenho de arquitetura:
 | --- | --- | --- | --- |
 | D1 | 21/10 | | Planejamento, decisões A–D |
 | D2 | 22/10 | | E0: estrutura, tooling, exemplo, CI |
+| D3 | 23/10 | | E1 (lock e imagem) e E2 (treino isolado), revisão |
