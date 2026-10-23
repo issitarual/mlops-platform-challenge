@@ -1,6 +1,6 @@
 """In-memory implementations of the ports, for service tests without Docker or uv."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from mlship.domain.environment import ImageRef
@@ -46,9 +46,11 @@ class FakeDockerfile:
 
 
 class FakeContainerRuntime:
-    def __init__(self) -> None:
+    def __init__(self, selfcheck_failure: str | None = None) -> None:
         self.images: dict[str, ImageRef] = {}
         self.builds: list[tuple[str, dict[str, str], list[str]]] = []
+        self.selfcheck_failure = selfcheck_failure
+        self.verified: list[str] = []
 
     def find_image(self, tag: str) -> ImageRef | None:
         return self.images.get(tag)
@@ -60,7 +62,16 @@ class FakeContainerRuntime:
         self.images[tag] = image
         return image
 
-    def run_training(self, spec: TrainingJobSpec) -> TrainingJobResult:
+    def verify_image(self, tag: str) -> str | None:
+        self.verified.append(tag)
+        return self.selfcheck_failure
+
+    def remove_image(self, tag: str) -> None:
+        self.images.pop(tag, None)
+
+    def run_training(
+        self, spec: TrainingJobSpec, on_log: Callable[[str], None]
+    ) -> TrainingJobResult:
         raise NotImplementedError
 
     def ensure_serving_image(

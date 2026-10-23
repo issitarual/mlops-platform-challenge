@@ -37,3 +37,9 @@ def test_base_image_python_must_match_python_version() -> None:
 
 def test_registry_prefixed_base_image_is_accepted() -> None:
     Settings(base_image="public.ecr.aws/docker/library/" + PINNED)
+
+
+@pytest.mark.parametrize("field", ["train_timeout_seconds", "train_cpu_limit", "train_pids_limit"])
+def test_resource_limits_must_be_positive(field: str) -> None:
+    with pytest.raises(ValidationError, match="greater than 0"):
+        Settings(**{field: 0})

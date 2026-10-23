@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from fakes import FakeContainerRuntime, FakeDockerfile, FakeLockResolver, FakeRuntimePackager
 
-from mlship.domain.errors import MlshipError
+from mlship.domain.errors import EnvironmentBuildError, MlshipError
 from mlship.services.environment_service import LOCK_INPUTS_PREFIX, EnvironmentService
 
 
@@ -154,3 +154,21 @@ def test_changed_runtime_or_dockerfile_gives_a_new_image(project: Path, change: 
     )
     assert not second.cache_hit
     assert second.image.tag != first.image.tag
+
+
+def test_new_image_is_verified_once_and_cached_image_is_not(project: Path) -> None:
+    containers = FakeContainerRuntime()
+    service = _service(containers=containers)
+    first = service.prepare(project)
+    service.prepare(project)
+    assert containers.verified == [first.image.tag]
+
+
+def test_image_failing_its_selfcheck_is_deleted_not_cached(project: Path) -> None:
+    containers = FakeContainerRuntime(selfcheck_failure="typing_extensions.py (content differs)")
+    service = _service(containers=containers)
+    with pytest.raises(EnvironmentBuildError) as info:
+        service.prepare(project)
+    assert "disk" in info.value.hint
+    assert "typing_extensions.py" in info.value.details
+    assert containers.images == {}, "a broken image must not be reused by the next run"

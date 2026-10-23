@@ -44,7 +44,7 @@ select = [
 ban-relative-imports = "all"
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]  # assert is the point of a test
+"tests/**" = ["S101", "S108"]  # asserts are the point; "/tmp" there is a container path
 
 [tool.mypy]
 python_version = "3.12"
@@ -54,13 +54,13 @@ files = ["packages/sdk/src", "packages/runtime/src", "packages/cli/src", "tests"
 
 [[tool.mypy.overrides]]
 # Third-party packages without type information.
-module = ["docker", "docker.*", "mlflow", "mlflow.*"]
+module = ["docker", "docker.*", "mlflow", "mlflow.*", "sklearn", "sklearn.*", "skops", "skops.*", "pandas", "pandas.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["--strict-markers", "--import-mode=importlib"]
-pythonpath = ["tests/unit/cli"]  # shared fakes for service tests
+pythonpath = ["tests/unit/cli", "tests/unit/runtime"]  # shared fakes and helpers
 markers = [
     "integration: needs Docker or the MLflow server",
     "e2e: full init -> serve -> predict flow",
