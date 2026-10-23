@@ -11,7 +11,7 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
 | [002](#adr-002--contrato-mínimo-do-cientista) | Contrato mínimo do cientista | Aceita |
 | [003](#adr-003--workspace-uv-com-três-pacotes) | Workspace `uv` com três pacotes | Aceita |
 | [004](#adr-004--camadas-com-ports-e-adapters-aplicadas-por-pacote) | Camadas com ports e adapters, aplicadas por pacote | Aceita |
-| [005](#adr-005--um-lock-uma-imagem-para-treino-e-serving) | Um lock, uma imagem, para treino e serving | Aceita |
+| [005](#adr-005--um-ambiente-para-treino-e-serving-identificado-por-todas-as-entradas) | Um ambiente para treino e serving, identificado por todas as entradas | Aceita |
 | [006](#adr-006--mlflow-skinny-no-runtime-e-modelo-salvo-offline) | `mlflow-skinny` no runtime e modelo salvo offline | Aceita |
 | [007](#adr-007--imagem-de-serving-por-versão-de-modelo) | Imagem de serving por versão de modelo | Aceita |
 | [008](#adr-008--mlflow-local-com-sqlite) | MLflow local com SQLite | Aceita |
@@ -23,6 +23,7 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
 | [014](#adr-014--versionamento-de-dados-por-referência) | Versionamento de dados por referência | Aceita |
 | [015](#adr-015--versionamento-de-ponta-a-ponta-e-de-modelos) | Versionamento de ponta a ponta e de modelos | Aceita |
 | [016](#adr-016--observabilidade-do-serving-e-referência-para-drift) | Observabilidade do serving e referência para drift | Aceita (dashboard P1, referência P2) |
+| [017](#adr-017--formatos-de-modelo-por-nível-de-confiança) | Formatos de modelo por nível de confiança | Aceita (níveis 1 e 2; nível 3 no desenho) |
 
 **Decisões previstas**, registradas quando implementadas:
 
@@ -70,7 +71,9 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
   Campos **opcionais** `primary_metric` e `direction` (`"minimize"` ou `"maximize"`)
   habilitam o gate de promoção (ADR-013); entram no E3.
 - **Critério para o contrato:** só se pede o que a ferramenta não consegue inferir **e**
-  que muda o comportamento dela.
+  que muda o comportamento dela. Limitações da ferramenta não viram exigências do
+  contrato: qualquer objeto com `.predict()` é aceito, e o formato de serialização é
+  escolhido pela ferramenta conforme o nível de confiança (ADR-017).
 - **Alternativas descartadas:**
   - classe base para herdar: acopla o código do usuário à ferramenta;
   - arquivo de configuração YAML: mais um formato para aprender;
@@ -130,17 +133,88 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
   adapter tem um par AWS (MLflow local → SageMaker; Docker local → SageMaker
   Training/ECS). Custo: mais arquivos e uma camada de indireção na CLI.
 
-### ADR-005 — Um lock, uma imagem, para treino e serving
+### ADR-005 — Um ambiente para treino e serving, identificado por todas as entradas
 
 - **Contexto:** diferença de ambiente entre treino e serving é uma das causas clássicas
-  de skew.
-- **Decisão:** a ferramenta resolve o `requirements.txt` do cientista junto com o
-  runtime num lock com hashes (`uv`), para Python e plataforma fixos (linux/amd64). A
-  imagem recebe a tag igual ao hash do lock, com cache, e é a mesma no treino e no serving.
-- **Alternativas descartadas:** instalar dependências em cada execução (lento e não
-  reprodutível); uma imagem por projeto sem lock (versões flutuam entre builds).
-- **Consequências:** conflitos com o runtime aparecem na resolução, antes do treino.
-  Versões não fixadas pelo cientista viram aviso, não erro: o lock fixa e informa.
+  de skew. E um cache de imagens só é correto se a chave muda sempre que qualquer
+  entrada do build muda.
+- **Decisão:**
+  - **lock no host:** `uv pip compile` resolve o `requirements.txt` do cientista junto
+    com as dependências do runtime, com hashes, só wheels (`--no-build`), para Python
+    3.12 e Linux x86_64 (`x86_64-manylinux_2_28`). O lock existe antes do build;
+  - **lock reutilizado:** o resultado fica em `mlship.lock`, ao lado do
+    `requirements.txt`, com o hash das entradas na primeira linha. Enquanto
+    requirements, runtime e alvo não mudam, o lock é reaproveitado em vez de
+    resolvido de novo; assim, o mesmo projeto não pega versões novas por acaso e o
+    lock pode ser commitado e compartilhado (como `uv.lock` ou `poetry.lock`);
+  - **lock íntegro:** a segunda linha guarda o hash do corpo. Um lock só é
+    reaproveitado se o corpo bate com esse hash; um lock truncado, com conflito de
+    merge ou editado à mão é resolvido de novo, e a ferramenta avisa. A gravação é
+    atômica (arquivo temporário + rename), então nunca existe um lock pela metade;
+  - **alvo coerente:** plataforma do Docker, plataforma do lock, versão do Python e
+    imagem base são validadas juntas ao carregar a configuração (ex.: imagem arm64 com
+    lock x86_64, ou base sem digest, falham na hora, com mensagem clara);
+  - **runtime na imagem:** os wheels do `mlship-runtime` e do `mlship-sdk` são gerados
+    localmente e instalados com `--no-deps` (as dependências deles já estão no lock);
+  - **imagem base:** `python:3.12-slim` (Debian, glibc) fixada pelo digest do índice
+    multiarquitetura (`sha256:a0f57064…6704`, consultado no Docker Hub em 23/10), com
+    build em múltiplos estágios. No estágio de build, o `pip` da própria imagem instala
+    o lock com `--require-hashes --only-binary=:all: --no-deps` e os wheels da
+    ferramenta sem índice; depois o `pip` é removido. A imagem final tem só o
+    virtualenv, usuário não-root (UID 10001) e nenhuma ferramenta de build;
+  - **chave do ambiente (tag da imagem):** hash de **todas** as entradas do build:
+    lock, código-fonte do runtime e do sdk, digest da base, template do Dockerfile,
+    versão do Python e plataforma. Usa o código-fonte, não o wheel, porque wheels podem
+    carregar datas no arquivo e mudariam o hash a cada build;
+  - a mesma imagem serve ao treino e é a base da imagem de serving (ADR-007).
+- **Alternativas descartadas:**
+  - tag igual só ao hash do lock: mudanças no runtime, na base ou no template
+    reaproveitariam a imagem antiga do cache, um erro silencioso de reprodutibilidade;
+  - sem cache: correto, mas minutos a cada `train`;
+  - cache de camadas do Docker como única garantia: heurístico, e a tag não serviria
+    para lineage;
+  - resolver dentro do `docker build`: o lock só existiria depois do build, e não
+    daria para consultar o cache antes de construir;
+  - resolver num container de build: mais lento e exigiria Docker até no `validate`;
+  - publicar o runtime num índice de pacotes: é o caminho de produção (AWS
+    CodeArtifact, no desenho), inviável no prazo;
+  - montar o código do runtime na execução: a imagem deixaria de ser autossuficiente;
+  - Alpine: usa musl, muitos wheels não funcionam e pacotes compilariam do
+    código-fonte, quebrando o "só wheels";
+  - distroless ou Chainguard: superfície menor, mas com restrições de versão do Python
+    e de depuração; ficam em "Com mais tempo" para o estágio final.
+- **Consequências:**
+  - mesmas entradas, mesma imagem; qualquer mudança gera outra imagem;
+  - conflitos com o runtime aparecem na resolução, antes do treino. Versões não
+    fixadas pelo cientista viram aviso, não erro: o lock fixa e informa;
+  - a imagem base tem shell e gerenciador de pacotes; o Trivy no CI mede as
+    vulnerabilidades;
+  - o `pip` da base dispensa copiar o `uv` para a imagem: um binário a menos para
+    fixar e verificar;
+  - **verificado (E1):** lock real do exemplo com 56 pacotes, determinístico em duas
+    resoluções; a política de instalação do Dockerfile simulada fora do Docker
+    (instalação, `pip check` sem conflitos, treino e modelo salvo e carregado sem rede);
+    o adapter do Docker SDK construindo, encontrando e rotulando imagens. O build com a
+    imagem base real roda no job de integração do CI;
+  - **limites conhecidos, registrados:**
+    - até a validação do E5, opções de supply chain no `requirements.txt` do cientista
+      (`--index-url`, `-e`, `git+`) são aceitas pelo `uv` na resolução. O `train`
+      valida o projeto antes de resolver o lock;
+    - o índice de pacotes é implícito (PyPI). Variáveis do host como `UV_INDEX_URL`
+      mudam a origem da resolução sem entrar no hash das entradas. Em produção, a
+      resolução passa por um proxy controlado (AWS CodeArtifact);
+    - fixar a base por digest também congela as correções de segurança do Debian. O
+      Dependabot não enxerga esse digest, porque ele está no `config.py`, não num
+      Dockerfile; o processo de atualização (Renovate ou job agendado que abre PR,
+      validado pelo Trivy) fica em "Com mais tempo";
+    - o lock é resolvido para `--python-version 3.12`, e não para a versão exata
+      (3.12.x) da imagem base; para os pacotes atuais, o resultado é o mesmo;
+    - se o código do runtime mudar entre o cálculo do hash e o build dos wheels, a
+      imagem ficaria com o rótulo errado; risco baixo, aceito;
+  - **ponto em aberto:** as dependências do runtime têm hoje limites mínimos iguais às
+    versões mais recentes (ex.: `pandas>=3.1.0`), herdados do `uv add`. Isso aumenta a
+    chance de conflito com projetos que fixam versões mais antigas. Rever junto com a
+    validação de conflitos (E5).
 
 ### ADR-006 — `mlflow-skinny` no runtime e modelo salvo offline
 
@@ -156,14 +230,22 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
   - **hash garante integridade, não confiança.** O `train()` do cientista roda no mesmo
     processo que o runner e poderia alterar modelo e manifesto juntos. O hash calculado
     pelo host protege contra adulteração **depois** do treino (disco, registry,
-    trânsito). O modelo em si continua não confiável (carregar um pyfunc executa
-    pickle): esse risco é contido pelo isolamento do container de serving;
+    trânsito). O modelo em si continua não confiável: o risco ao carregá-lo depende do
+    formato (ADR-017) e é contido pelo isolamento do container de serving;
   - **achado (E0):** o `mlflow-skinny` 3.17.2 não é tão enxuto. Puxa `databricks-sdk`,
     `gitpython`, `opentelemetry-*`, `protobuf` 7 e `sqlparse`, e o `mlship-runtime`
     resolve para 45 pacotes. Projetos que fixem `protobuf` antigo (comum com
     TensorFlow) vão conflitar; a co-resolução do ADR-005 detecta isso antes do treino;
-  - **a verificar (E1):** se salvar e carregar como pyfunc exige `pandas`/`numpy` do
-    lado do cientista.
+  - **verificado (E1), com MLflow 3.17.2 e sem rede:**
+    - o pyfunc exige `numpy` e `pandas`, que o `mlflow-skinny` não declara; sem eles,
+      nem o `import mlflow.pyfunc` funciona. Os dois entram nas dependências do runtime;
+    - modelos scikit-learn são salvos por padrão em `skops`, que exige o pacote
+      `skops` no runtime (ver ADR-017). O `skops` depende do scikit-learn, que por isso
+      entra em todo ambiente;
+    - salvar offline, carregar pelo pyfunc e prever funciona, com predições idênticas
+      às do modelo original;
+  - ao ser importado, o MLflow escreve no log uma sugestão de carregar um "skill" de
+    tracing. Os containers definem `MLFLOW_DISABLE_AGENT_HINT=1` para manter os logs limpos.
 
 ### ADR-007 — Imagem de serving por versão de modelo
 
@@ -197,9 +279,16 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
 - **Decisão:** o adapter de containers usa o Docker SDK.
 - **Alternativas descartadas:** `subprocess` com lista de argumentos: sem dependência
   extra e transparente, mas sem tipos e mais difícil de testar.
-- **Consequências:** o cliente Docker é criado sob demanda, no primeiro uso, e não na
-  montagem dos serviços. Assim, comandos que não usam containers (`validate`, `runs`,
-  `promote`) e os testes unitários rodam sem um daemon Docker ativo.
+- **Consequências:**
+  - o cliente Docker é criado sob demanda, no primeiro uso, e não na montagem dos
+    serviços. Assim, comandos que não usam containers (`validate`, `runs`, `promote`)
+    e os testes unitários rodam sem um daemon Docker ativo;
+  - o cliente é injetável, e o mapeamento de erros (Docker parado, imagem ausente,
+    build com falha) é testado com um fake, sem Docker;
+  - o SDK constrói imagens pelo builder clássico, não pelo BuildKit. Funciona com o
+    Docker 29 (verificado, inclusive com o containerd image store do Docker Desktop),
+    mas é o caminho que o Docker está descontinuando. Alternativa futura: chamar
+    `docker buildx build` pela linha de comando.
 
 ### ADR-010 — Dados do exemplo verificados por hash
 
@@ -346,7 +435,7 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
   | Ferramenta | Semantic Versioning + commit | versão + git sha | manifesto | 015 |
   | Código do cientista | hash de `train.py`, `requirements.txt` e demais `.py` do projeto | SHA-256 | manifesto | 015 |
   | Dependências | lock co-resolvido com hashes (`uv`) | hash do lock | manifesto; tag da imagem | 005 |
-  | Imagem de treino | tag = hash do lock; imutável | tag + digest | Docker local; ECR em produção | 005 |
+  | Imagem de treino | tag = hash de todas as entradas do build; imutável | tag + digest | Docker local; ECR em produção | 005 |
   | Dados | hash por arquivo | SHA-256 por arquivo | manifesto; S3 versionado ou Delta em produção | 010, 014 |
   | Parâmetros e métricas | MLflow tracking | `run_id` | MLflow | 006 |
   | Resultado da validação | gravado no run | `run_id` | manifesto | 015 |
@@ -411,6 +500,50 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
   - **se não couber no prazo:** fica o `/metrics` e este ADR, e o dashboard vai para
     "Com mais tempo".
 
+### ADR-017 — Formatos de modelo por nível de confiança
+
+- **Contexto:**
+  - o MLflow 3.17 salva modelos scikit-learn em `skops`, que desserializa sem executar
+    código. Mas, por padrão, o `skops` bloqueia tipos considerados arriscados, entre eles
+    os de quase todo modelo de árvore. Testado: `Ridge` salva; `DecisionTreeRegressor`,
+    `RandomForestRegressor` e `GradientBoostingRegressor` bloqueiam
+    `sklearn.tree._tree.Tree`; o `HistGradientBoostingRegressor` do exemplo bloqueia o
+    `TreePredictor`. Num arquivo adulterado, esses tipos podem fazer o `predict()`
+    derrubar o processo ou ler memória fora dos limites;
+  - formatos como `cloudpickle` aceitam qualquer objeto, mas carregar o modelo executa
+    código arbitrário.
+- **Decisão:** um caminho seguro por padrão e uma saída explícita, sem restringir o
+  tipo de modelo:
+  - **nível 1, seguro (padrão):** estimadores e pipelines scikit-learn em `skops`, com
+    uma allowlist revisada (os tipos de árvore acima). A plataforma pode ampliá-la por
+    configuração (`MLSHIP_SKOPS_TRUSTED_TYPES`). Tipo fora da lista falha o treino com
+    mensagem que diz qual tipo é e como liberá-lo;
+  - **nível 2, com aceitação explícita:** qualquer objeto com `.predict()`, via pyfunc
+    genérico em `cloudpickle`, só com `train --allow-pickle`. A escolha fica no
+    manifesto, a CLI e o `serve` avisam, e a plataforma pode desligar essa opção por
+    configuração;
+  - **nível 3 (desenho, "Com mais tempo"):** formatos nativos de XGBoost, LightGBM ou
+    ONNX, sem pickle. Ainda a verificar se os flavors do MLflow usam esses formatos;
+  - a confiança é concedida **por quem opera** (configuração do host ou flag), nunca
+    pelo `train.py`; os tipos confiáveis e o nível usado vão para o manifesto.
+- **Alternativas descartadas:**
+  - restringir a v1 a scikit-learn: seguro, mas fecha a plataforma para modelos comuns
+    e empurra usuários para fora dela;
+  - o cientista declarar os tipos confiáveis no `TrainOutput`: quem é avaliado
+    concederia a própria confiança;
+  - `cloudpickle` para todos os modelos: carregar passaria a executar código arbitrário
+    por padrão;
+  - confiar em todos os tipos que o `skops` reportar: anula o controle, e a própria
+    biblioteca desaconselha.
+- **Consequências:**
+  - o exemplo funciona sem flags; modelos customizados também funcionam, com o risco
+    aceito e registrado;
+  - a lista de tipos confiáveis fica gravada no `MLmodel`, que o hash calculado pelo
+    host protege contra adulteração (ADR-006);
+  - o risco residual (travamento ou leitura de memória nos tipos de árvore; execução
+    de código no nível 2) é contido pelo container de serving: sem credenciais, sem rede
+    de saída, sistema de arquivos read-only, usuário não-root.
+
 ---
 
 ## Fora de escopo
@@ -431,6 +564,11 @@ Itens fora do escopo do código; todos aparecem no desenho de arquitetura:
 
 - Snapshot dos dados por conteúdo a cada `train` (`.mlship/data/<hash>/` local, S3 em
   produção), para tornar reproduzíveis runs antigos mesmo após mudança nos dados (ADR-014).
+- Formatos nativos sem pickle para XGBoost, LightGBM e ONNX (nível 3 do ADR-017).
+- Estágio final da imagem em distroless ou Chainguard (ADR-005).
+- Atualização automática do digest da imagem base (Renovate ou job agendado que abre
+  PR), com o Trivy validando a nova imagem (ADR-005).
+- Resolver o lock para a versão exata do Python da imagem base (ADR-005).
 - Avaliação feita pela ferramenta: champion e candidato avaliados no mesmo holdout fixo,
   para que o gate de promoção não dependa de métricas calculadas pelo código do
   cientista (ADR-013).
