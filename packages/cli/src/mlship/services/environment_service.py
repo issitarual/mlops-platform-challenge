@@ -11,7 +11,7 @@ from mlship.domain.environment import (
     PreparedEnvironment,
     ResolvedLock,
 )
-from mlship.domain.errors import MlshipError
+from mlship.domain.errors import EnvironmentBuildError, MlshipError
 from mlship.services.ports import (
     ContainerRuntime,
     DockerfileProvider,
@@ -162,4 +162,14 @@ class EnvironmentService:
             shutil.copyfile(lock.path, context / "requirements.lock")
             self._runtime.build_wheels(context / "wheels")
             image = self._containers.build_image(context, tag, labels)
+
+        failure = self._containers.verify_image(tag)
+        if failure is not None:
+            self._containers.remove_image(tag)
+            raise EnvironmentBuildError(
+                "The environment image was built but failed its self-check; it was deleted.",
+                hint="The usual cause is a full disk during the build. Free disk space "
+                "(and, on Docker Desktop, run `docker builder prune`), then try again.",
+                details=failure,
+            )
         return PreparedEnvironment(image, lock, inputs, cache_hit=False)

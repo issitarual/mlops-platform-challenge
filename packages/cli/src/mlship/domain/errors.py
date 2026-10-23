@@ -1,5 +1,7 @@
 """Errors shown to the user: what went wrong, how to fix it, and the raw details."""
 
+from mlship.domain.validation import ValidationReport
+
 
 class MlshipError(Exception):
     """Base error. ``hint`` says how to fix it; ``details`` carries tool output, if any."""
@@ -21,3 +23,15 @@ class LockResolutionError(MlshipError):
 
 class EnvironmentBuildError(MlshipError):
     """The environment image could not be built."""
+
+
+class ContainerRunError(MlshipError):
+    """Docker refused to create or start a container."""
+
+
+class ProjectInvalidError(MlshipError):
+    """The project breaks the contract; ``report`` lists every issue at once."""
+
+    def __init__(self, report: ValidationReport) -> None:
+        super().__init__(f"The project has {len(report.errors)} error(s).")
+        self.report = report

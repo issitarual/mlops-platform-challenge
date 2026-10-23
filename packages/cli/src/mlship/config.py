@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Self
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_BASE_IMAGE = (
@@ -26,9 +26,16 @@ class Settings(BaseSettings):
     base_image: str = DEFAULT_BASE_IMAGE
     lock_filename: str = "mlship.lock"
     image_repository: str = "mlship-env"
-    train_timeout_seconds: int = 3_600
+    train_timeout_seconds: int = Field(default=3_600, gt=0)
     train_memory_limit: str = "4g"
-    train_cpu_limit: float = 2.0
+    train_cpu_limit: float = Field(default=2.0, gt=0)
+    train_pids_limit: int = Field(default=256, gt=0)
+    train_tmpfs_size: str = "1g"
+    skops_trusted_types: list[str] = [
+        "sklearn.tree._tree.Tree",
+        "sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor",
+    ]
+    allow_pickle_enabled: bool = True
 
     @model_validator(mode="after")
     def _target_is_consistent(self) -> Self:

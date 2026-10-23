@@ -1,6 +1,6 @@
 """Interfaces implemented by ``repositories/`` and ``adapters/``."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Protocol
 
@@ -38,7 +38,17 @@ class ContainerRuntime(Protocol):
 
     def build_image(self, context_dir: Path, tag: str, labels: Mapping[str, str]) -> ImageRef: ...
 
-    def run_training(self, spec: TrainingJobSpec) -> TrainingJobResult: ...
+    def verify_image(self, tag: str) -> str | None:
+        """Run the image self-check, locked down; ``None`` if ok, else its output."""
+        ...
+
+    def remove_image(self, tag: str) -> None: ...
+
+    def run_training(
+        self, spec: TrainingJobSpec, on_log: Callable[[str], None]
+    ) -> TrainingJobResult:
+        """Run the job with the isolation of ADR-018; stream logs to ``on_log``."""
+        ...
 
     def ensure_serving_image(
         self, base: ImageRef, model: ModelVersion, model_dir: Path
