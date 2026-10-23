@@ -1,4 +1,5 @@
 import math
+from typing import Any, cast
 
 import pandas as pd
 from sklearn.linear_model import Ridge
@@ -57,5 +58,5 @@ def test_prediction_count_must_match_rows() -> None:
 
 
 def test_metrics_must_be_a_mapping() -> None:
-    output = TrainOutput(model=MODEL, metrics=[0.1], input_example=X)
+    output = TrainOutput(model=MODEL, metrics=cast(Any, [0.1]), input_example=X)
     assert codes(output) == {"METRICS_TYPE"}

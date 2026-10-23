@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 import mlflow.pyfunc
 import numpy as np
@@ -7,14 +8,17 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.linear_model import Ridge
 
 from mlship_runtime.runner.config import SerializationPolicy
-from mlship_runtime.runner.writer import save_model
+from mlship_runtime.runner.issues import Issue
+from mlship_runtime.runner.writer import SavedModel, save_model
 
 X = pd.DataFrame({"a": np.arange(40.0), "b": np.arange(40.0) % 3})
 Y = X["a"] * 2 + X["b"]
 TREE_PREDICTOR = "sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor"
 
 
-def _save(model: object, tmp_path: Path, policy: SerializationPolicy):
+def _save(
+    model: Any, tmp_path: Path, policy: SerializationPolicy
+) -> tuple[SavedModel | None, list[Issue]]:
     predictions = model.predict(X.head(3))
     return save_model(model, X.head(3), predictions, tmp_path / "model", policy)
 

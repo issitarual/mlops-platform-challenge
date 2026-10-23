@@ -34,8 +34,9 @@ class FakeImages:
 
 
 class FakeClient:
-    def __init__(self, images: FakeImages) -> None:
+    def __init__(self, images: FakeImages, containers: Any = None) -> None:
         self.images = images
+        self.containers = containers
 
     def ping(self) -> bool:
         return True
@@ -153,8 +154,7 @@ def _training_runtime(
     container: FakeContainer, create_error: Exception | None = None
 ) -> tuple[DockerRuntime, FakeContainers]:
     containers = FakeContainers(container, create_error)
-    client = FakeClient(FakeImages())
-    client.containers = containers
+    client = FakeClient(FakeImages(), containers)
     return DockerRuntime("linux/amd64", client_factory=lambda: client), containers
 
 

@@ -5,7 +5,7 @@ import sys
 import traceback
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from mlship_runtime.runner.issues import Issue, RunnerError
 
@@ -50,4 +50,4 @@ def load_train_function(project_dir: Path) -> TrainFunction:
                 )
             ]
         )
-    return train
+    return cast(TrainFunction, train)

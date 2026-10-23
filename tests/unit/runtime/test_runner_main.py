@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from runner_fixtures import GOOD_TRAIN, write_config
@@ -9,7 +10,7 @@ from mlship_runtime.runner.__main__ import main
 
 def _run(
     workspace: dict[str, Path], monkeypatch: pytest.MonkeyPatch, train_py: str
-) -> tuple[int, dict]:
+) -> tuple[int, dict[str, Any]]:
     (workspace["project"] / "train.py").write_text(train_py)
     config = write_config(workspace["project"].parent / "run.json", workspace)
     monkeypatch.setenv("MLSHIP_RUN_CONFIG", str(config))

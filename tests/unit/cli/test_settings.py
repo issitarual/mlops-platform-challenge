@@ -42,4 +42,4 @@ def test_registry_prefixed_base_image_is_accepted() -> None:
 @pytest.mark.parametrize("field", ["train_timeout_seconds", "train_cpu_limit", "train_pids_limit"])
 def test_resource_limits_must_be_positive(field: str) -> None:
     with pytest.raises(ValidationError, match="greater than 0"):
-        Settings(**{field: 0})
+        Settings.model_validate({field: 0})

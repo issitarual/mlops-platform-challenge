@@ -11,7 +11,7 @@ PROJECT_MOUNT = "/mlship/project"
 DATA_MOUNT = "/mlship/data"
 CONFIG_MOUNT = "/mlship/run.json"
 OUTPUT_MOUNT = "/output"
-CONTAINER_TMP = "/tmp"
+CONTAINER_TMP = "/tmp"  # noqa: S108 - a tmpfs inside the container, not a host temp dir
 RUN_CONFIG_SCHEMA_VERSION = 1
 
 

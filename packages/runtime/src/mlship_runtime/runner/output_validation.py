@@ -1,7 +1,7 @@
 """Validate what ``train()`` returned, collecting every problem at once."""
 
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sized
 from numbers import Real
 from typing import Any
 
@@ -104,7 +104,4 @@ def _metric_issues(metrics: object) -> list[Issue]:
 
 
 def _length(value: object) -> int | None:
-    try:
-        return len(value)
-    except TypeError:
-        return None
+    return len(value) if isinstance(value, Sized) else None
