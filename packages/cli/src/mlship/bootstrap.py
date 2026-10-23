@@ -6,6 +6,8 @@ Controllers receive ready services from here; services only know the ports.
 from dataclasses import dataclass
 
 from mlship.adapters.docker_runtime import DockerRuntime
+from mlship.adapters.dockerfile import EnvironmentDockerfile
+from mlship.adapters.runtime_packager import WorkspaceRuntimePackager
 from mlship.adapters.uv_lock_resolver import UvLockResolver
 from mlship.config import Settings
 from mlship.repositories.mlflow_model_registry import MlflowModelRegistry
@@ -20,21 +22,31 @@ from mlship.services.validation.validator import ProjectValidator
 @dataclass(frozen=True, slots=True)
 class Services:
     validator: ProjectValidator
+    environment: EnvironmentService
     training: TrainingService
     registry: RegistryService
     serving: ServingService
 
 
 def build_services(settings: Settings) -> Services:
-    container_runtime = DockerRuntime()
+    container_runtime = DockerRuntime(settings.platform)
     run_repository = MlflowRunRepository(settings.tracking_uri, settings.experiment_name)
     model_registry = MlflowModelRegistry(settings.tracking_uri, settings.model_name)
     validator = ProjectValidator()
     environment = EnvironmentService(
-        UvLockResolver(settings.python_version, settings.platform), container_runtime
+        UvLockResolver(settings.python_version, settings.python_platform),
+        WorkspaceRuntimePackager(),
+        EnvironmentDockerfile(settings.base_image),
+        container_runtime,
+        python_version=settings.python_version,
+        python_platform=settings.python_platform,
+        docker_platform=settings.platform,
+        lock_filename=settings.lock_filename,
+        image_repository=settings.image_repository,
     )
     return Services(
         validator=validator,
+        environment=environment,
         training=TrainingService(validator, environment, container_runtime, run_repository),
         registry=RegistryService(run_repository, model_registry),
         serving=ServingService(model_registry, container_runtime),

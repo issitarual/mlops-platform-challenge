@@ -15,10 +15,15 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def sha256_tree(root: Path) -> dict[str, str]:
+def sha256_tree(root: Path, exclude_dirs: frozenset[str] = frozenset()) -> dict[str, str]:
     """Hash of every file under ``root``, keyed by POSIX relative path, sorted.
 
     Relative POSIX keys keep the result identical across machines and OSes.
+    ``exclude_dirs`` skips directories by name anywhere in the tree (e.g. caches).
     """
-    files = sorted(p for p in root.rglob("*") if p.is_file())
+    files = sorted(
+        p
+        for p in root.rglob("*")
+        if p.is_file() and not exclude_dirs.intersection(p.relative_to(root).parts[:-1])
+    )
     return {p.relative_to(root).as_posix(): sha256_file(p) for p in files}

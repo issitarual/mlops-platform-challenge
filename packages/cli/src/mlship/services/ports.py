@@ -1,23 +1,42 @@
-"""Interfaces implemented by ``repositories/`` and ``adapters/``.
+"""Interfaces implemented by ``repositories/`` and ``adapters/``."""
 
-Signatures are provisional and get refined in E1-E4.
-"""
-
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Protocol
 
-from mlship.domain.environment import ImageRef, ResolvedLock
+from mlship.domain.environment import ImageRef
 from mlship.domain.runs import Manifest, ModelVersion, RunRecord
 from mlship.domain.training import TrainingJobResult, TrainingJobSpec
 
 
 class LockResolver(Protocol):
-    def resolve(self, requirements_file: Path, output_dir: Path) -> ResolvedLock: ...
+    def resolve(self, requirement_files: Sequence[Path], output: Path) -> None:
+        """Resolve all files together into ``output`` (pinned, with hashes).
+
+        All input files and ``output`` live in the same directory, so the file names
+        written into the lock do not depend on where it was generated.
+        """
+        ...
+
+
+class RuntimePackager(Protocol):
+    """The tool's own code that goes into the image (runtime + sdk)."""
+
+    def requirements(self) -> list[str]: ...
+
+    def source_sha256(self) -> str: ...
+
+    def build_wheels(self, output_dir: Path) -> list[Path]: ...
+
+
+class DockerfileProvider(Protocol):
+    def render(self) -> str: ...
 
 
 class ContainerRuntime(Protocol):
-    def ensure_image(self, lock: ResolvedLock) -> ImageRef: ...
+    def find_image(self, tag: str) -> ImageRef | None: ...
+
+    def build_image(self, context_dir: Path, tag: str, labels: Mapping[str, str]) -> ImageRef: ...
 
     def run_training(self, spec: TrainingJobSpec) -> TrainingJobResult: ...
 

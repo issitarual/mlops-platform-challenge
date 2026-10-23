@@ -60,6 +60,7 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["--strict-markers", "--import-mode=importlib"]
+pythonpath = ["tests/unit/cli"]  # shared fakes for service tests
 markers = [
     "integration: needs Docker or the MLflow server",
     "e2e: full init -> serve -> predict flow",
