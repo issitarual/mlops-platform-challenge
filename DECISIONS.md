@@ -22,6 +22,7 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
 | [013](#adr-013--champion-e-challenger-com-gate-de-promoção) | Champion e challenger com gate de promoção | Aceita (implementação P2) |
 | [014](#adr-014--versionamento-de-dados-por-referência) | Versionamento de dados por referência | Aceita |
 | [015](#adr-015--versionamento-de-ponta-a-ponta-e-de-modelos) | Versionamento de ponta a ponta e de modelos | Aceita |
+| [016](#adr-016--observabilidade-do-serving-e-referência-para-drift) | Observabilidade do serving e referência para drift | Aceita (dashboard P1, referência P2) |
 
 **Decisões previstas**, registradas quando implementadas:
 
@@ -381,6 +382,34 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
     `mlship-model`) é definido no E3;
   - implementação: E3 (registro, aliases) e E4 (serving por versão). Hoje existem só o
     tipo `ModelVersion` e a interface `ModelRegistry`.
+
+### ADR-016 — Observabilidade do serving e referência para drift
+
+- **Contexto:** o ciclo de vida de um modelo não termina no deploy: é preciso ver como
+  ele se comporta em produção e ter uma referência para detectar degradação. O
+  serving já expõe `/metrics` (Prometheus) e a versão do modelo em cada resposta e
+  log, mas sem um painel esses dados não chegam a quem opera.
+- **Decisão:**
+  - **dashboard (P1, E7):** Prometheus e Grafana no `compose.yaml`, com dashboard
+    provisionado e versionado no repositório: latência p50/p95/p99, throughput, taxa de
+    erro e versão do modelo servida. O `serve` informa o endereço do dashboard;
+  - **referência para drift (P2, E2):** o runner grava no manifesto estatísticas das
+    features de treino (média, quantis). É a base que qualquer detecção de drift
+    precisa;
+  - **desenho de produção:** CloudWatch e SageMaker Model Monitor; alarmes de
+    degradação disparam um pipeline de retreino, que passa pelo gate de promoção
+    (ADR-013) antes do deploy. É esse loop que fecha o ciclo de vida.
+- **Alternativas descartadas:**
+  - só documentar o `/metrics`: os dados existem, mas ninguém os vê sem um `curl`;
+  - comando `mlship monitor` com relatório de drift: alto valor, mas não cabe no prazo;
+    um comando novo no fluxo do cientista só se justifica com esse relatório;
+  - retreino automático implementado: no desenho, com serviços gerenciados.
+- **Consequências:**
+  - na apresentação, o teste de carga e o dashboard mostram a latência ao vivo;
+  - o drift fica preparado (referência no manifesto e predições amostradas), mas não
+    implementado;
+  - **se não couber no prazo:** fica o `/metrics` e este ADR, e o dashboard vai para
+    "Com mais tempo".
 
 ---
 
