@@ -18,3 +18,11 @@ def test_sha256_tree_uses_sorted_posix_relative_keys(tmp_path: Path) -> None:
     result = sha256_tree(tmp_path)
     assert list(result) == ["b.csv", "nested/a.csv"]
     assert set(result.values()) == {ABC_SHA256}
+
+
+def test_sha256_tree_can_skip_cache_directories(tmp_path: Path) -> None:
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "mod.py").write_bytes(b"abc")
+    (tmp_path / "pkg" / "__pycache__").mkdir()
+    (tmp_path / "pkg" / "__pycache__" / "mod.pyc").write_bytes(b"compiled")
+    assert list(sha256_tree(tmp_path, exclude_dirs=frozenset({"__pycache__"}))) == ["pkg/mod.py"]
