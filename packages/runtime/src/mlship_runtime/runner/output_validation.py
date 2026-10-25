@@ -6,7 +6,10 @@ from numbers import Real
 from typing import Any
 
 from mlship_runtime.runner.issues import Issue
+from mlship_runtime.runner.names import NAME_RULE, is_valid_name
 from mlship_sdk import TrainOutput
+
+MAX_METRICS = 100
 
 
 def validate_train_output(output: object) -> tuple[list[Issue], Any]:
@@ -79,10 +82,22 @@ def _metric_issues(metrics: object) -> list[Issue]:
             )
         ]
     issues: list[Issue] = []
+    if len(metrics) > MAX_METRICS:
+        issues.append(
+            Issue(
+                "METRICS_TOO_MANY",
+                f"train() returned {len(metrics)} metrics; the limit is {MAX_METRICS}.",
+                "Return the evaluation metrics only; log curves or per-class values as files.",
+            )
+        )
     for name, value in metrics.items():
-        if not isinstance(name, str) or not name:
+        if not isinstance(name, str) or not is_valid_name(name):
             issues.append(
-                Issue("METRIC_NAME", f"Metric name {name!r} is not a non-empty string.", "")
+                Issue(
+                    "METRIC_NAME_INVALID",
+                    f"Metric name {name!r} is not allowed.",
+                    f"Use {NAME_RULE}, e.g. 'rmse_test' instead of 'rmse (test)'.",
+                )
             )
         if isinstance(value, bool) or not isinstance(value, Real):
             issues.append(
