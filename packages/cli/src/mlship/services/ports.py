@@ -65,6 +65,12 @@ class ContainerRuntime(Protocol):
         ...
 
 
+class ProjectTemplate(Protocol):
+    def files(self) -> Mapping[str, bytes]:
+        """Relative POSIX path -> content of every file ``mlship init`` creates."""
+        ...
+
+
 class ContentHasher(Protocol):
     def file(self, path: Path) -> str: ...
 

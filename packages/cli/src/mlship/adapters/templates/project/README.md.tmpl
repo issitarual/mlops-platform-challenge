@@ -1,0 +1,13 @@
+# My model
+
+Created with `mlship init`. `data/example.csv` is synthetic data so the project runs as is;
+replace it, and the model in `train.py`, with yours.
+
+```bash
+mlship validate --data data      # every problem at once, without running your code
+mlship lock                      # after changing requirements.txt; commit mlship.lock
+mlship train --data data         # isolated, reproducible training
+mlship runs                      # compare runs
+mlship promote 1                 # the version number to serve as champion
+mlship serve                     # REST API for the champion
+```

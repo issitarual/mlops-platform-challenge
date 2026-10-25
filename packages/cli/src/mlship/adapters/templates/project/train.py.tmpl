@@ -1,0 +1,40 @@
+"""Training entry point for mlship. Replace the model and the data loading with yours.
+
+Contract: ``train(data_dir, params)`` returns a ``TrainOutput``. It runs in an
+isolated container: read data only from ``data_dir``, and expect no network.
+"""
+
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error, r2_score
+from sklearn.model_selection import train_test_split
+
+from mlship_sdk import TrainOutput
+
+TARGET = "target"
+
+
+def train(data_dir: Path, params: dict[str, Any]) -> TrainOutput:
+    # Parameters from `mlship train -p key=value` arrive as strings.
+    seed = int(params.get("seed", 42))
+    n_estimators = int(params.get("n_estimators", 100))
+
+    frame = pd.read_csv(data_dir / "example.csv")
+    features = frame.drop(columns=[TARGET])
+    x_train, x_test, y_train, y_test = train_test_split(
+        features, frame[TARGET], test_size=0.2, random_state=seed
+    )
+
+    # Put any preprocessing inside the model (a sklearn Pipeline), so serving applies it too.
+    model = RandomForestRegressor(n_estimators=n_estimators, random_state=seed)
+    model.fit(x_train, y_train)
+
+    predictions = model.predict(x_test)
+    metrics = {
+        "mae": float(mean_absolute_error(y_test, predictions)),
+        "r2": float(r2_score(y_test, predictions)),
+    }
+    return TrainOutput(model=model, metrics=metrics, input_example=x_test.head(5))
