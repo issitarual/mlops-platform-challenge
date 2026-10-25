@@ -98,11 +98,12 @@ class TrainingService:
         *,
         model_name: str,
         allow_pickle: bool = False,
+        strict: bool = False,
         on_log: Callable[[str], None] = lambda _: None,
     ) -> TrainingOutcome:
         report = self._validator.validate(project_dir, data_dir)
         report = ValidationReport((*report.issues, *param_issues(params)))
-        if report.blocks(strict=False):
+        if report.blocks(strict=strict):
             raise ProjectInvalidError(report)
         if allow_pickle and not self._policy.allow_pickle_enabled:
             raise MlshipError(

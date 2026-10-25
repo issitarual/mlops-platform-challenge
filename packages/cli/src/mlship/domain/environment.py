@@ -3,7 +3,17 @@
 import hashlib
 import json
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 from pathlib import Path
+
+
+class LockState(StrEnum):
+    """mlship.lock against the current requirements.txt and runtime."""
+
+    CURRENT = "current"
+    MISSING = "missing"
+    STALE = "stale"
+    MODIFIED = "modified"
 
 
 @dataclass(frozen=True, slots=True)

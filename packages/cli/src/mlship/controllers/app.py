@@ -2,7 +2,7 @@
 
 import typer
 
-from mlship.controllers import init, promote, runs, serve, train, validate
+from mlship.controllers import init, lock, promote, runs, serve, train, validate
 
 app = typer.Typer(
     name="mlship",
@@ -12,6 +12,7 @@ app = typer.Typer(
 )
 app.command("init")(init.command)
 app.command("validate")(validate.command)
+app.command("lock")(lock.command)
 app.command("train")(train.command)
 app.command("runs")(runs.command)
 app.command("promote")(promote.command)

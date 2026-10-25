@@ -4,6 +4,7 @@ import ast
 from pathlib import Path
 
 from mlship.domain.validation import Severity, ValidationIssue
+from mlship.services.validation.sources import ENCODING_HINT, is_encoding_error, parse_source
 
 _SIGNATURE_HINT = "Use: def train(data_dir: Path, params: dict) -> TrainOutput"
 
@@ -21,14 +22,24 @@ def check_train_script(project_dir: Path) -> list[ValidationIssue]:
             )
         ]
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        tree = parse_source(path)
     except SyntaxError as exc:
+        if is_encoding_error(exc):
+            return [
+                ValidationIssue(
+                    "TRAIN_ENCODING",
+                    Severity.ERROR,
+                    f"train.py cannot be read as Python source: {exc.msg}.",
+                    "train.py",
+                    ENCODING_HINT,
+                )
+            ]
         return [
             ValidationIssue(
                 "TRAIN_SYNTAX",
                 Severity.ERROR,
                 f"Syntax error: {exc.msg}.",
-                f"train.py:{exc.lineno}",
+                f"train.py:{exc.lineno}" if exc.lineno else "train.py",
                 "Fix the syntax; the file must run with Python 3.12.",
             )
         ]
