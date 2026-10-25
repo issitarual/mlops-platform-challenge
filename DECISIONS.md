@@ -26,12 +26,12 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
 | [017](#adr-017--formatos-de-modelo-por-nível-de-confiança) | Formatos de modelo por nível de confiança | Aceita (níveis 1 e 2; nível 3 no desenho) |
 | [018](#adr-018--treino-isolado-e-contrato-com-o-runner) | Treino isolado e contrato com o runner | Aceita |
 | [019](#adr-019--lineage-registro-e-promoção) | Lineage, registro e promoção | Aceita |
+| [020](#adr-020--serving-da-versão-promovida) | Serving da versão promovida | Aceita |
 
 **Decisões previstas**, registradas quando implementadas:
 
 | Tema | Épico |
 | --- | --- |
-| Design da API de serving (schema pela assinatura, lote, erros, limites, health) | E4 |
 | Validação do projeto em dois níveis (erro e aviso), estática via AST | E5 |
 
 ---
@@ -748,6 +748,119 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
     tentativas de conexão de telemetria depois do opt-out. O treino real em container
     com registro roda no job de integração do CI.
 
+### ADR-020 — Serving da versão promovida
+
+- **Contexto:** servir é onde o modelo encontra tráfego externo. O que chega ao
+  container tem de ser exatamente o que foi registrado, no ambiente em que foi
+  treinado, carregado só com a confiança que a plataforma concede, atrás de uma API
+  com contrato explícito e observável.
+- **Decisão:**
+  - **o alias é resolvido uma vez, no host:** `mlship serve --alias champion` resolve a
+    versão e, a partir daí, só o número da versão existe. A instância responde e
+    registra a versão em cada resposta, log e métrica (`mlship_model_info`);
+  - **âncora de confiança: o banco do tracking, não o artifact store.** A versão do
+    registry e as tags do run (no banco do MLflow) dizem o que deve chegar; nada que
+    venha do artifact store (S3 em produção) é usado antes de bater com elas. Quem só
+    tem escrita no bucket não consegue trocar o modelo, o lock nem a política de carga.
+    O `manifest.json` e o `run.json` do artifact store são registro para humanos e não
+    entram nessa decisão;
+  - **nada é usado antes de verificado:** o modelo é baixado do registry a cada
+    `serve` (nunca de um cache local), percorrido sem seguir links, com limite de
+    tamanho, e o SHA-256 tem de bater com o registrado na versão. Dentro do container,
+    o processo verifica de novo antes de carregar;
+  - **mesma imagem do treino (D1):** o run guarda o `mlship.lock` como artefato e, nas
+    tags, o hash do lock e a chave do ambiente. Se a imagem existe, é reutilizada; se
+    foi apagada, é reconstruída a partir daquele lock **só se o hash do lock bater com
+    a tag e a chave recalculada for idêntica**. Lock diferente é adulteração; chave
+    diferente (a ferramenta mudou) é erro com explicação, nunca um ambiente "parecido";
+  - **imagem de serving por versão (ADR-007):** `FROM <imagem do treino>` + modelo
+    verificado + identidade (nome, versão, hash) e política de carga em variáveis de
+    ambiente. A tag inclui versão, hash do modelo, imagem base e política: muda
+    qualquer um, outra imagem;
+  - **política de carga decidida pela plataforma (ADR-017):** o `MLmodel` foi escrito
+    no mesmo processo que o código do cientista, então é dado, não decisão. Antes de
+    desserializar, o servidor lê o descritor com `yaml.safe_load` (via MLflow) e só
+    aceita o caminho seguro (flavor `sklearn` em skops, `python_function` delegando a
+    `mlflow.sklearn`, sem código embutido, tipos dentro da allowlist da plataforma).
+    Qualquer outra coisa só é aceita se a tag do run registrar o modelo como salvo em
+    cloudpickle, o que só acontece com `--allow-pickle` no treino. Um modelo em skops é
+    servido sem permissão de pickle, mesmo que o run a tivesse;
+  - **API (`/v1/predict`):**
+    - schema gerado da assinatura do modelo (D2): o OpenAPI mostra as colunas reais;
+      tipos estritos (`"3"` não vira número, `true` não vira 1); `NaN` e `Infinity`
+      (aceitos pelo parser JSON do Python) são 422, não uma falha do modelo; coluna
+      desconhecida é erro; todos os erros de campo de uma vez, com a posição
+      (`rows.3.MedInc`), sem
+      ecoar os valores enviados;
+    - uma rota para 1 a N linhas (D3), predição vetorizada numa chamada; limite de
+      linhas (padrão 1.000) e de bytes (padrão 1 MB, recusado com 413 antes do parse).
+      O corpo é lido até o limite antes de chegar à aplicação, o que vale também para
+      corpo em chunks, sem `Content-Length`;
+    - predição fora do event loop (thread), com timeout (504);
+    - erros sempre em JSON com código, mensagem e `request_id`, nunca stack trace. O
+      erro inesperado vira 500 no middleware mais externo, para que entre nas
+      métricas, no log de acesso e no `X-Request-ID` como qualquer outra resposta
+      (o handler de exceção do Starlette roda fora dos middlewares e deixaria o 500
+      invisível para um alerta de taxa de erro);
+    - `X-Request-ID` aceito se seguro, senão gerado; devolvido em toda resposta;
+    - API key opcional (`MLSHIP_SERVING_API_KEY`), comparada em tempo constante;
+  - **operação:** `/health/live` e `/health/ready` separados; `/metrics` (Prometheus)
+    na mesma porta e sem a API key (D5): latência por rota em histograma (p50/p95/p99
+    via `histogram_quantile`), requisições por status, linhas preditas e versão
+    servida. Com vários workers, o modo multiprocesso do Prometheus agrega os
+    processos. Logs em JSON, um por requisição, e amostragem opcional de entradas e
+    predições (sem colunas excluídas por configuração) como base para drift (ADR-016);
+  - **container:** o mesmo endurecimento do treino (não-root, rootfs read-only, `/tmp`
+    em tmpfs, `cap_drop ALL`, `no-new-privileges`, limites de CPU, memória e
+    processos). A diferença é a rede: a API precisa receber requisições, publicada só
+    em `127.0.0.1`;
+  - **`serve` em primeiro plano (D4):** mostra o que verificou, o endereço e os logs;
+    Ctrl+C para e remove o container. Se a API parar sozinha (falta de memória,
+    crash), o comando termina com erro, código de saída e dica. Quem quiser em segundo
+    plano roda a imagem de serving com `docker run -d` (README).
+- **Alternativas descartadas:**
+  - baixar o modelo no startup do container: credenciais e dependência do registry
+    no container que recebe tráfego (ADR-007);
+  - reconstruir o ambiente "como der" quando a imagem sumiu: reabriria o skew de
+    ambiente que o projeto evita;
+  - lista genérica de registros validada só pelo MLflow: OpenAPI inútil e erro só no
+    primeiro campo;
+  - rotas separadas para lote: duas rotas com a mesma lógica. Inferência em lote de
+    verdade (milhões de linhas) é um job offline, no desenho;
+  - porta separada para métricas: em produção, quem separa é a rede (ALB roteando só
+    `/v1/*`; `/metrics` e health só na VPC);
+  - confiar nos `skops_trusted_types` gravados no `MLmodel`: o próprio código do
+    cientista poderia ampliá-los;
+  - ler a chave do ambiente e a permissão de pickle do `manifest.json` e do `run.json`
+    baixados do artifact store (a primeira versão da E4): quem tivesse escrita só no
+    bucket trocaria o lock por um com pacotes maliciosos e recalcularia a chave;
+  - assinatura criptográfica dos artefatos (cosign, KMS): protege também contra quem
+    escreve no banco, mas fica no desenho (fora de escopo).
+- **Consequências:**
+  - da resposta HTTP chega-se à versão, da versão ao run, e do run a tudo o que o
+    gerou (ADR-015, ADR-019);
+  - trocar o `champion` exige um novo `serve` (nova imagem, novo container): a
+    instância nunca muda de modelo sozinha. Rollback é servir a versão anterior, cuja
+    imagem já existe;
+  - cada worker carrega o modelo na sua memória: memória ≈ workers × modelo;
+  - o timeout responde 504, mas a thread da predição termina sozinha; uma predição
+    patológica ainda consome CPU até acabar (limite de CPU do container);
+  - modelos treinados antes desta versão (sem as tags de ambiente) precisam ser
+    treinados de novo para serem servidos;
+  - **limites conhecidos, registrados:** quem tem escrita no banco do MLflow consegue
+    mudar a versão e as tags juntas; em produção, isso é IAM restrito ao pipeline de
+    CI/CD, e o desenho prevê assinatura. O container de serving tem saída para a
+    rede (o Docker não separa entrada de saída sem orquestrador); em produção, security
+    groups sem egress. A API key local é uma variável de ambiente do container; em
+    produção, IAM ou JWT no API Gateway e segredos no Secrets Manager;
+  - **verificado (E4):** API com um modelo real salvo pelo runner (contrato, erros,
+    limites, auth, timeout, métricas, request id); política de carga contra `MLmodel`
+    adulterado (tipos fora da allowlist, loader trocado, código embutido, pickle sem
+    permissão); hash adulterado impede o carregamento; o entrypoint real com 2 workers
+    e métricas agregadas; o fluxo do host com fakes (alias, verificação, imagem
+    reutilizada ou reconstruída, chave divergente). O ponta a ponta com Docker
+    (train → promote → serve → predict) roda no job de integração do CI.
+
 ---
 
 ## Fora de escopo
@@ -790,3 +903,4 @@ Itens fora do escopo do código; todos aparecem no desenho de arquitetura:
 | D1 | 21/10 | | Planejamento, decisões A–D |
 | D2 | 22/10 | | E0: estrutura, tooling, exemplo, CI |
 | D3 | 23/10 | | E1 (lock e imagem) e E2 (treino isolado), revisão |
+| D4 | 24/10 | | E3 (lineage e registro), revisão, testes no Windows, E4 (serving) |

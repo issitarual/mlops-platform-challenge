@@ -19,7 +19,7 @@ alternativas, implementou e revisou. As alternativas eram verificadas e revisada
   M3. A IA propôs; eu reordenei e cortei escopo.
 - **Decisões:** para cada escolha relevante, a IA apresentava 2 a 3 alternativas com
   prós, contras e o que o mercado usa, com uma recomendação. **A decisão era minha** e
-  ficou registrada no `DECISIONS.md` (ADR-001 a ADR-019).
+  ficou registrada no `DECISIONS.md` (ADR-001 a ADR-020).
 - **Implementação:** a IA escrevia numa cópia de trabalho, rodava lint, tipos e testes
   e só então copiava para a minha pasta. Eu revisava, rodava localmente e commitava.
 - **Revisão crítica:** ao fim de cada épico, pedi uma revisão "como Staff de MLOps",
@@ -83,6 +83,23 @@ alternativas, implementou e revisou. As alternativas eram verificadas e revisada
 - **Código de erro do MLflow suposto.** A IA assumiu que alias inexistente voltava como
   "não encontrado"; o teste contra o MLflow real mostrou `INVALID_PARAMETER_VALUE`, e o
   tratamento foi ajustado.
+
+- **Bypass da política de carga no próprio código do E4.** A primeira versão aceitava
+  qualquer modelo com flavor `sklearn` em skops. Um `MLmodel` adulterado podia manter
+  esse flavor e trocar o `loader_module` do `python_function` ou embutir código. A
+  regra passou a exigir também o loader `mlflow.sklearn` e nenhum código embutido, com
+  um teste para cada adulteração.
+- **Três bugs na API que passaram pela revisão por leitura e pelos testes.** Só
+  apareceram quando a IA rodou a API com entradas adversas: corpo em chunks acima do
+  limite voltava 400 em vez de 413; `NaN` no JSON chegava ao modelo e virava 500; e
+  um 500 não entrava nas métricas nem levava o `X-Request-ID`, o que deixaria um
+  alerta de taxa de erro cego. Os testes cobriam só o limite com `Content-Length` e
+  valores finitos. Corrigidos, com testes de regressão.
+- **Falha de segurança no desenho da própria IA (E4).** O `serve` lia a chave do
+  ambiente e a permissão de pickle do `manifest.json` e do `run.json` baixados do
+  artifact store, sem verificar. Quem tivesse escrita só no bucket trocaria o lock por
+  um com pacotes maliciosos. A âncora de confiança passou a ser o banco do MLflow
+  (tags do run), e o lock só é usado se o hash bater (ADR-020).
 
 ### Achados em que a IA ajudou a diagnosticar
 

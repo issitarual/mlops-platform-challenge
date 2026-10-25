@@ -56,6 +56,33 @@ uv run mlship promote 1 --project examples/california-housing # alias champion -
 O serving sempre segue um alias explícito (`champion`, `challenger`), nunca "a
 última versão".
 
+## Servir o modelo
+
+```bash
+uv run mlship serve --project examples/california-housing
+```
+
+O `serve` resolve o alias (padrão `champion`), baixa o modelo, confere o SHA-256 com o
+registrado, monta a imagem de serving sobre a imagem exata do treino e sobe a API em
+http://127.0.0.1:8080. Ctrl+C para e remove o container. Opções: `--alias`, `--port`,
+`--workers`.
+
+```bash
+curl -s http://127.0.0.1:8080/v1/predict -H "content-type: application/json" -d '{
+  "rows": [{"MedInc": 8.3, "HouseAge": 41.0, "AveRooms": 6.98, "AveBedrms": 1.02,
+            "Population": 322.0, "AveOccup": 2.56, "Latitude": 37.88, "Longitude": -122.23}]
+}'
+```
+
+A resposta traz as predições, o modelo e a versão (`{"model": {"name":
+"california-housing", "version": "2"}, ...}`) e o `request_id`. A documentação da API
+fica em `/docs`; health em `/health/live` e `/health/ready`; métricas em `/metrics`.
+
+- **API key (opcional):** defina `MLSHIP_SERVING_API_KEY` antes do `serve`; as chamadas
+  a `/v1/*` passam a exigir o header `X-API-Key`.
+- **Em segundo plano:** a imagem de serving é autossuficiente:
+  `docker run -d -p 127.0.0.1:8080:8080 <imagem mostrada pelo serve>`.
+
 ## Estrutura
 
 | Pacote | Onde roda | Papel |
