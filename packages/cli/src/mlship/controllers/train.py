@@ -4,12 +4,11 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from pydantic import ValidationError
 
-from mlship.bootstrap import build_services
-from mlship.config import Settings
 from mlship.controllers import presenters
+from mlship.controllers.context import load_services
 from mlship.domain.errors import MlshipError, ProjectInvalidError
+from mlship.domain.runs import resolve_model_name
 from mlship.domain.validation import Severity, ValidationIssue
 
 
@@ -51,6 +50,13 @@ def command(
         list[str] | None,
         typer.Option("--param", "-p", help="KEY=VALUE passed to train(); repeatable."),
     ] = None,
+    model_name: Annotated[
+        str | None,
+        typer.Option(
+            envvar="MLSHIP_MODEL_NAME",
+            help="Registered model name (default: the project folder name).",
+        ),
+    ] = None,
     allow_pickle: Annotated[
         bool,
         typer.Option(
@@ -64,10 +70,11 @@ def command(
     if problems:
         presenters.issues(problems)
         raise typer.Exit(code=2)
+    services = load_services()
     try:
-        services = build_services(Settings())
-    except ValidationError as exc:
-        presenters.error(MlshipError("Invalid mlship configuration.", details=str(exc)))
+        name = resolve_model_name(project, model_name)
+    except MlshipError as exc:
+        presenters.error(exc)
         raise typer.Exit(code=2) from exc
 
     presenters.training_started()
@@ -76,6 +83,7 @@ def command(
             project.resolve(),
             data.resolve(),
             params,
+            model_name=name,
             allow_pickle=allow_pickle,
             on_log=presenters.training_log,
         )

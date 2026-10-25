@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from mlship.domain.environment import PreparedEnvironment
+from mlship.domain.runs import ModelVersion
 from mlship.domain.validation import ValidationIssue
 
 PROJECT_MOUNT = "/mlship/project"
@@ -56,3 +57,5 @@ class TrainingOutcome:
     environment: PreparedEnvironment
     job: TrainingJobResult
     params: Mapping[str, str] = field(default_factory=dict)
+    model_name: str = ""
+    model_version: ModelVersion | None = None

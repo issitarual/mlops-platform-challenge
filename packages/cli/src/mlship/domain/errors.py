@@ -29,6 +29,26 @@ class ContainerRunError(MlshipError):
     """Docker refused to create or start a container."""
 
 
+class TrackingUnavailableError(MlshipError):
+    """The MLflow tracking server cannot be reached."""
+
+
+class TrackingError(MlshipError):
+    """MLflow rejected or failed an operation."""
+
+
+class ModelNotFoundError(MlshipError):
+    """A model, version or alias does not exist in the registry."""
+
+
+class UntrustedArtifactError(MlshipError):
+    """Training output contains something other than regular files and directories."""
+
+
+class ArtifactTooLargeError(UntrustedArtifactError):
+    """Training output is larger, or has more files, than the platform allows."""
+
+
 class ProjectInvalidError(MlshipError):
     """The project breaks the contract; ``report`` lists every issue at once."""
 

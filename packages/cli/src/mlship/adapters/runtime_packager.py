@@ -23,7 +23,7 @@ _UV_HINT = "Install uv: https://docs.astral.sh/uv/getting-started/installation/"
 _CACHE_DIRS = frozenset({"__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache"})
 
 
-def _source_dir(distribution: str) -> Path:
+def source_dir(distribution: str) -> Path:
     """Directory of a package installed from local source (editable workspace member)."""
     try:
         raw = metadata.distribution(distribution).read_text("direct_url.json")
@@ -54,7 +54,7 @@ class WorkspaceRuntimePackager:
     def source_sha256(self) -> str:
         """One hash over the source of runtime and sdk (caches excluded)."""
         trees = {
-            dist: sha256_tree(_source_dir(dist), exclude_dirs=_CACHE_DIRS)
+            dist: sha256_tree(source_dir(dist), exclude_dirs=_CACHE_DIRS)
             for dist in (RUNTIME_DIST, SDK_DIST)
         }
         canonical = json.dumps(trees, sort_keys=True, separators=(",", ":"))
@@ -64,7 +64,7 @@ class WorkspaceRuntimePackager:
         output_dir.mkdir(parents=True, exist_ok=True)
         uv = find_executable("uv", _UV_HINT)
         for dist in (SDK_DIST, RUNTIME_DIST):
-            source = _source_dir(dist)
+            source = source_dir(dist)
             command = [uv, "build", "--wheel", "--quiet", "--out-dir", str(output_dir), str(source)]
             result = run(command, source, self._runner)
             if result.returncode != 0:

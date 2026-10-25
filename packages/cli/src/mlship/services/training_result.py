@@ -10,12 +10,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from mlship.domain.names import is_valid_name
 from mlship.domain.training import TrainingJobResult
 from mlship.domain.validation import Severity, ValidationIssue
 
 MAX_RESULT_BYTES = 1_000_000
 MAX_ERRORS = 100
 MAX_TEXT = 2_000
+MAX_METRICS = 100  # same as the runner; MLflow allows 1000 per batch
 _SERIALIZATIONS = {"skops", "cloudpickle"}
 _SIGNALS: dict[int, tuple[str, str]] = {
     6: ("SIGABRT", "A native library aborted; see the log above."),
@@ -140,13 +142,26 @@ def parse_result(path: Path, job: TrainingJobResult, limits_hint: str) -> Parsed
     metrics_value = raw.get("metrics")
     metrics_raw: dict[Any, Any] = metrics_value if isinstance(metrics_value, dict) else {}
     metrics = {
-        k[:MAX_TEXT]: float(v)
+        k: float(v)
         for k, v in metrics_raw.items()
         if isinstance(k, str)
+        and is_valid_name(k)
         and isinstance(v, int | float)
         and not isinstance(v, bool)
         and math.isfinite(v)
     }
+    if len(metrics) != len(metrics_raw) or len(metrics) > MAX_METRICS:
+        # The runner already rejects these; reaching here means its output was altered.
+        issues = (
+            *issues,
+            _issue(
+                "RESULT_METRICS_INVALID",
+                "result.json has metrics that break the contract (name, value or count).",
+                "Metrics must be finite numbers with valid names, at most "
+                f"{MAX_METRICS}; see the log above.",
+            ),
+        )
+        metrics = {}
     model_value = raw.get("model")
     model: dict[Any, Any] | None = model_value if isinstance(model_value, dict) else None
     serialization = model.get("serialization") if model else None

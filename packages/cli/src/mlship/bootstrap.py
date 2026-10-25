@@ -3,11 +3,14 @@
 Controllers receive ready services from here; services only know the ports.
 """
 
+import getpass
 from dataclasses import dataclass
 
 from mlship.adapters.docker_runtime import DockerRuntime
 from mlship.adapters.dockerfile import EnvironmentDockerfile
+from mlship.adapters.hashing import Sha256Hasher
 from mlship.adapters.runtime_packager import WorkspaceRuntimePackager
+from mlship.adapters.tool_info import GitToolInfo
 from mlship.adapters.uv_lock_resolver import UvLockResolver
 from mlship.config import Settings
 from mlship.domain.training import ResourceLimits
@@ -15,6 +18,7 @@ from mlship.repositories.mlflow_model_registry import MlflowModelRegistry
 from mlship.repositories.mlflow_run_repository import MlflowRunRepository
 from mlship.services.environment_service import EnvironmentService
 from mlship.services.registry_service import RegistryService
+from mlship.services.run_recorder import RunRecorder
 from mlship.services.serving_service import ServingService
 from mlship.services.training_service import TrainingPolicy, TrainingService
 from mlship.services.validation.validator import ProjectValidator
@@ -31,8 +35,8 @@ class Services:
 
 def build_services(settings: Settings) -> Services:
     container_runtime = DockerRuntime(settings.platform)
-    run_repository = MlflowRunRepository(settings.tracking_uri, settings.experiment_name)
-    model_registry = MlflowModelRegistry(settings.tracking_uri, settings.model_name)
+    run_repository = MlflowRunRepository(settings.tracking_uri, settings.artifact_root)
+    model_registry = MlflowModelRegistry(settings.tracking_uri)
     validator = ProjectValidator()
     environment = EnvironmentService(
         UvLockResolver(settings.python_version, settings.python_platform),
@@ -52,7 +56,9 @@ def build_services(settings: Settings) -> Services:
             validator,
             environment,
             container_runtime,
-            run_repository,
+            RunRecorder(run_repository, model_registry),
+            Sha256Hasher(),
+            GitToolInfo(),
             TrainingPolicy(
                 limits=ResourceLimits(
                     cpus=settings.train_cpu_limit,
@@ -63,8 +69,17 @@ def build_services(settings: Settings) -> Services:
                 ),
                 skops_trusted_types=tuple(settings.skops_trusted_types),
                 allow_pickle_enabled=settings.allow_pickle_enabled,
+                model_max_bytes=settings.model_max_bytes,
+                model_max_files=settings.model_max_files,
             ),
         ),
-        registry=RegistryService(run_repository, model_registry),
+        registry=RegistryService(run_repository, model_registry, actor=_current_user),
         serving=ServingService(model_registry, container_runtime),
     )
+
+
+def _current_user() -> str:
+    try:
+        return getpass.getuser()
+    except (KeyError, OSError):  # no user name in the environment or the passwd database
+        return "unknown"

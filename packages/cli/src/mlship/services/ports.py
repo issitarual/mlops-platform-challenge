@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Protocol
 
 from mlship.domain.environment import ImageRef
-from mlship.domain.runs import Manifest, ModelVersion, RunRecord
+from mlship.domain.runs import ModelVersion, RunRecord, RunStatus, ToolInfo
 from mlship.domain.training import TrainingJobResult, TrainingJobSpec
 
 
@@ -57,17 +57,64 @@ class ContainerRuntime(Protocol):
     def run_serving(self, image: ImageRef, port: int, workers: int) -> None: ...
 
 
-class RunRepository(Protocol):
-    def save(self, manifest: Manifest, output_dir: Path) -> RunRecord: ...
+class ContentHasher(Protocol):
+    def file(self, path: Path) -> str: ...
 
-    def list_recent(self, limit: int) -> Sequence[RunRecord]: ...
+    def tree(
+        self,
+        root: Path,
+        exclude_dirs: frozenset[str] = frozenset(),
+        include: Callable[[str], bool] | None = None,
+    ) -> dict[str, str]: ...
+
+    def untrusted_tree(self, root: Path, max_bytes: int, max_files: int) -> dict[str, str]:
+        """Hash output of untrusted code; ``UntrustedArtifactError`` on links or excess."""
+        ...
+
+
+class ToolInfoProvider(Protocol):
+    def info(self) -> ToolInfo: ...
+
+
+class RunRepository(Protocol):
+    """Experiment tracking: one experiment per model name, one run per ``train``."""
+
+    def check_available(self) -> None:
+        """Fail fast (``TrackingUnavailableError``) before any expensive work."""
+        ...
+
+    def start(self, experiment: str, tags: Mapping[str, str]) -> str:
+        """Create a RUNNING run and return its id."""
+        ...
+
+    def log(
+        self,
+        run_id: str,
+        *,
+        params: Mapping[str, str],
+        metrics: Mapping[str, float],
+        tags: Mapping[str, str],
+        artifacts: Mapping[str, Path],
+    ) -> None:
+        """Log values and upload ``artifacts`` (name -> file or directory)."""
+        ...
+
+    def end(self, run_id: str, status: RunStatus, tags: Mapping[str, str]) -> None: ...
+
+    def list_recent(self, experiment: str, limit: int) -> Sequence[RunRecord]: ...
 
 
 class ModelRegistry(Protocol):
-    def register(self, run_id: str) -> ModelVersion: ...
+    def register(self, name: str, run_id: str, model_sha256: str) -> ModelVersion:
+        """New immutable version from the run's ``model`` artifact."""
+        ...
 
-    def set_alias(self, version: int, alias: str) -> None: ...
+    def get_version(self, name: str, version: int) -> ModelVersion: ...
 
-    def resolve_alias(self, alias: str) -> ModelVersion: ...
+    def get_alias(self, name: str, alias: str) -> ModelVersion | None: ...
+
+    def set_alias(self, name: str, alias: str, version: int, tags: Mapping[str, str]) -> None:
+        """Point ``alias`` at ``version`` and record ``tags`` on that version."""
+        ...
 
     def download(self, model: ModelVersion, target_dir: Path) -> Path: ...

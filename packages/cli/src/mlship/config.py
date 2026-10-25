@@ -17,8 +17,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MLSHIP_")
 
     tracking_uri: str = "http://127.0.0.1:5000"
-    experiment_name: str = "mlship"
-    model_name: str = "mlship-model"
+    artifact_root: str | None = None
     work_dir: Path = Path(".mlship")
     python_version: str = "3.12"
     platform: str = "linux/amd64"
@@ -36,6 +35,8 @@ class Settings(BaseSettings):
         "sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor",
     ]
     allow_pickle_enabled: bool = True
+    model_max_bytes: int = Field(default=2 * 1024**3, gt=0)
+    model_max_files: int = Field(default=10_000, gt=0)
 
     @model_validator(mode="after")
     def _target_is_consistent(self) -> Self:
