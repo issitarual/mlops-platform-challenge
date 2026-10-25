@@ -6,13 +6,20 @@ Run with: uv run pytest -m integration tests/integration -v
 import json
 import os
 import shutil
+import socket
+import threading
+import urllib.error
+import urllib.request
 import uuid
 from pathlib import Path
+from typing import Any
 
+import docker
 import pytest
 
 from mlship.bootstrap import build_services
 from mlship.config import Settings
+from mlship.domain.errors import ContainerRunError
 from mlship.domain.training import TrainingOutcome
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -143,3 +150,74 @@ def test_timeout_stops_training(tmp_path: Path) -> None:
     outcome = _train(project, data, train_timeout_seconds=5)
     assert not outcome.succeeded
     assert [i.code for i in outcome.issues] == ["TRAIN_TIMEOUT"]
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+def _post(url: str, payload: object) -> tuple[int, dict[str, Any]]:
+    request = urllib.request.Request(  # noqa: S310 - local test server
+        url, data=json.dumps(payload).encode(), headers={"content-type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as error:
+        return error.code, json.loads(error.read())
+
+
+def test_promoted_model_is_served_end_to_end(tmp_path: Path) -> None:
+    """train -> promote -> serve -> predict, with the real images and container."""
+    project, data = _project(tmp_path, (EXAMPLE / "train.py").read_text())
+    services = build_services(_settings(tmp_path))
+    name = _model_name()
+    trained = services.training.train(project, data, {}, model_name=name)
+    assert trained.succeeded and trained.model_version is not None, trained.issues
+    services.registry.promote(name, trained.model_version.version, "champion")
+
+    prepared = services.serving.prepare(project, name, "champion")
+    assert prepared.environment_image == trained.environment.image, "same image as training"
+    port, ready = _free_port(), threading.Event()
+    urls: list[str] = []
+
+    def on_ready(url: str) -> None:
+        urls.append(url)
+        ready.set()
+
+    stopped: list[ContainerRunError] = []
+
+    def serve() -> None:
+        try:
+            services.serving.run(
+                prepared,
+                port=port,
+                workers=2,
+                environment={},
+                on_log=lambda _: None,
+                on_ready=on_ready,
+            )
+        except ContainerRunError as exc:
+            stopped.append(exc)
+
+    server = threading.Thread(target=serve, daemon=True)
+    server.start()
+    try:
+        assert ready.wait(timeout=300), "the API never became ready"
+        row = dict.fromkeys(COLUMNS, 1)  # the fixture CSV has integers: long columns
+        status, body = _post(f"{urls[0]}/v1/predict", {"rows": [row, row]})
+        assert status == 200, body
+        assert body["model"] == {"name": name, "version": str(trained.model_version.version)}
+        assert len(body["predictions"]) == 2
+        status, body = _post(f"{urls[0]}/v1/predict", {"rows": [{"MedInc": "x"}]})
+        assert status == 422 and len(body["details"]) >= 2
+        with urllib.request.urlopen(f"{urls[0]}/metrics", timeout=10) as response:  # noqa: S310
+            assert f'mlship_model_info{{name="{name}"' in response.read().decode()
+    finally:
+        client = docker.from_env()
+        for container in client.containers.list(filters={"label": f"org.mlship.model-name={name}"}):
+            container.stop(timeout=10)
+        server.join(timeout=60)
+    assert len(stopped) == 1 and "stopped while serving" in stopped[0].message
