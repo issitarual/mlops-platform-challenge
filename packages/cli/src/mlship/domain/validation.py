@@ -9,6 +9,15 @@ class Severity(StrEnum):
     WARNING = "warning"  # bad practice: blocks only with --strict
 
 
+class ResolutionCheck(StrEnum):
+    """Whether requirements.txt was resolved together with the runtime."""
+
+    PASSED = "passed"
+    FAILED = "failed"
+    OFFLINE = "offline"
+    SKIPPED = "skipped"
+
+
 @dataclass(frozen=True, slots=True)
 class ValidationIssue:
     code: str  # stable identifier, e.g. "TRAIN_SIGNATURE"

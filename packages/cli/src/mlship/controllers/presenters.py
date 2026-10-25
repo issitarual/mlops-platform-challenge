@@ -1,19 +1,24 @@
 """All terminal output lives here, so commands stay free of formatting code."""
 
 from collections.abc import Sequence
-from typing import NoReturn
+from pathlib import Path
 
-import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from mlship.domain.environment import ResolvedLock
 from mlship.domain.errors import MlshipError
 from mlship.domain.redaction import redact
 from mlship.domain.runs import Promotion, RunRecord, RunStatus
 from mlship.domain.serving import PreparedServing
 from mlship.domain.training import TrainingOutcome
-from mlship.domain.validation import Severity, ValidationIssue, ValidationReport
+from mlship.domain.validation import (
+    ResolutionCheck,
+    Severity,
+    ValidationIssue,
+    ValidationReport,
+)
 
 console = Console()
 _STATUS_STYLE = {
@@ -25,22 +30,85 @@ _STATUS_STYLE = {
 err_console = Console(stderr=True)
 
 
-def not_implemented(command: str, epic: str) -> NoReturn:
-    err_console.print(f"[yellow]mlship {command}[/yellow]: not implemented yet ({epic}).")
-    raise typer.Exit(code=1)
+def lock_written(resolved: ResolvedLock) -> None:
+    if resolved.reused:
+        console.print("mlship.lock is current; nothing changed.")
+        return
+    note = " (the previous one had been edited by hand)" if resolved.discarded_modified else ""
+    console.print(f"[green]Wrote[/green] mlship.lock{note}. Commit it with requirements.txt.")
+
+
+def lock_deferred(exc: MlshipError) -> None:
+    err_console.print(
+        "[yellow]mlship.lock was not created[/yellow]: "
+        f"{escape(redact(exc.message))}\n  Run `mlship lock` when the package index is "
+        "reachable.",
+        highlight=False,
+    )
+
+
+def project_created(target: Path, created: Sequence[Path]) -> None:
+    names = ", ".join(p.relative_to(target).as_posix() for p in created)
+    console.print(f"[green]Created[/green] {escape(str(target))}: {escape(names)}")
+    enter = "" if target.resolve() == Path.cwd().resolve() else f"  cd {escape(str(target))}\n"
+    console.print(
+        f"Next:\n{enter}  mlship validate --data data\n  mlship train --data data",
+        highlight=False,
+    )
 
 
 def issues(items: tuple[ValidationIssue, ...] | list[ValidationIssue]) -> None:
-    """Every issue at once: where, what, and how to fix it."""
+    """Every issue at once: where, what, and how to fix it.
+
+    Messages quote the user's files (``pandas[performance]``), so they are escaped
+    as Rich markup, and redacted like every other message.
+    """
     for item in items:
         colour = "red" if item.severity is Severity.ERROR else "yellow"
         err_console.print(
             f"[{colour}]{item.severity.value}[/{colour}] [bold]{item.code}[/bold] "
-            f"[dim]{item.location}[/dim]\n  {item.message}",
+            f"[dim]{escape(item.location)}[/dim]\n  {escape(redact(item.message))}",
             highlight=False,
         )
         if item.hint:
-            err_console.print(f"  [green]fix:[/green] {item.hint}", highlight=False)
+            err_console.print(f"  [green]fix:[/green] {escape(redact(item.hint))}", highlight=False)
+
+
+_RESOLUTION = {
+    ResolutionCheck.PASSED: "[green]resolved[/green] together with the mlship runtime",
+    ResolutionCheck.FAILED: "[red]do not resolve[/red] together with the mlship runtime",
+    ResolutionCheck.OFFLINE: "[dim]not resolved (--offline)[/dim]",
+    ResolutionCheck.SKIPPED: "[dim]not resolved: fix the errors above first[/dim]",
+}
+
+
+def validation_result(
+    report: ValidationReport,
+    resolution: ResolutionCheck,
+    *,
+    strict: bool,
+    project: Path,
+    data: Path | None,
+) -> None:
+    issues(report.issues)
+    if report.issues:
+        err_console.print()
+    err_console.print(f"Dependencies: {_RESOLUTION[resolution]}")
+    if data is None:
+        err_console.print("Data: [dim]not checked (pass --data)[/dim]")
+    summary = f"{len(report.errors)} error(s), {len(report.warnings)} warning(s)"
+    if report.blocks(strict=strict):
+        reason = " (warnings count as errors with --strict)" if not report.errors else ""
+        err_console.print(f"[red]Project is not valid[/red]: {summary}{reason}.")
+    else:
+        err_console.print(f"[green]Project is valid[/green]: {summary}.")
+        if not report.issues:
+            target = "" if project.resolve() == Path.cwd().resolve() else f" {project}"
+            folder = data if data is not None else "<data folder>"
+            err_console.print(
+                f"Next: mlship train{escape(str(target))} --data {escape(str(folder))}",
+                highlight=False,
+            )
 
 
 def validation_failed(report: ValidationReport) -> None:

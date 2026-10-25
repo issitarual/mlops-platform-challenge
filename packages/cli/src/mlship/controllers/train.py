@@ -64,6 +64,7 @@ def command(
             "Loading such a model can run arbitrary code; the choice is recorded."
         ),
     ] = False,
+    strict: Annotated[bool, typer.Option(help="Treat validation warnings as errors (CI).")] = False,
 ) -> None:
     """Validate, build the environment and train inside a locked-down container."""
     params, problems = parse_params(param or [])
@@ -85,6 +86,7 @@ def command(
             params,
             model_name=name,
             allow_pickle=allow_pickle,
+            strict=strict,
             on_log=presenters.training_log,
         )
     except ProjectInvalidError as exc:
