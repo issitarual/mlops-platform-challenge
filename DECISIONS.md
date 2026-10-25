@@ -27,12 +27,7 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
 | [018](#adr-018--treino-isolado-e-contrato-com-o-runner) | Treino isolado e contrato com o runner | Aceita |
 | [019](#adr-019--lineage-registro-e-promoção) | Lineage, registro e promoção | Aceita |
 | [020](#adr-020--serving-da-versão-promovida) | Serving da versão promovida | Aceita |
-
-**Decisões previstas**, registradas quando implementadas:
-
-| Tema | Épico |
-| --- | --- |
-| Validação do projeto em dois níveis (erro e aviso), estática via AST | E5 |
+| [021](#adr-021--validação-do-projeto-lock-e-init) | Validação do projeto, lock e `init` | Aceita |
 
 ---
 
@@ -209,9 +204,9 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
     o adapter do Docker SDK construindo, encontrando e rotulando imagens. O build com a
     imagem base real roda no job de integração do CI;
   - **limites conhecidos, registrados:**
-    - até a validação do E5, opções de supply chain no `requirements.txt` do cientista
-      (`--index-url`, `-e`, `git+`) são aceitas pelo `uv` na resolução. O `train`
-      valida o projeto antes de resolver o lock;
+    - opções de supply chain no `requirements.txt` (`--index-url`, `-e`, `git+`, URLs,
+      caminhos locais, `--hash` inline) são barradas pela validação antes de o `uv`
+      ver o arquivo (ADR-021);
     - o índice de pacotes é implícito (PyPI). Variáveis do host como `UV_INDEX_URL`
       mudam a origem da resolução sem entrar no hash das entradas. Em produção, a
       resolução passa por um proxy controlado (AWS CodeArtifact);
@@ -223,10 +218,10 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
       (3.12.x) da imagem base; para os pacotes atuais, o resultado é o mesmo;
     - se o código do runtime mudar entre o cálculo do hash e o build dos wheels, a
       imagem ficaria com o rótulo errado; risco baixo, aceito;
-  - **ponto em aberto:** as dependências do runtime têm hoje limites mínimos iguais às
-    versões mais recentes (ex.: `pandas>=3.1.0`), herdados do `uv add`. Isso aumenta a
-    chance de conflito com projetos que fixam versões mais antigas. Rever junto com a
-    validação de conflitos (E5);
+  - **resolvido no E5:** os limites mínimos do runtime eram as versões mais recentes,
+    herdadas do `uv add` (ex.: `pandas>=3.1.0`). Foram relaxados para as menores
+    versões testadas (`numpy>=1.26.4`, `pandas>=2.2.2`), e um job do CI roda os testes
+    do runtime com elas (ADR-021);
   - **achado (E2):** com o disco do host cheio, o Docker Desktop concluiu um build "com
     sucesso" e deixou arquivos truncados na imagem (`typing_extensions.py` sem
     `Sentinel`); o treino falhava com `ImportError` ou `SIGBUS`. É o motivo do
@@ -590,7 +585,7 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
   - **antes do container:** validação do projeto (sintaxe e assinatura do `train` via
     AST; `requirements.txt` sem `--index-url`, `-e`, `git+`, URLs ou caminhos locais;
     diretório de dados existente e com arquivos). Erro bloqueia antes do lock; todos os
-    erros aparecem de uma vez. É o núcleo do E5, antecipado;
+    erros aparecem de uma vez. As regras completas estão no ADR-021;
   - **container:** `--network none`; rootfs read-only; `/tmp` em tmpfs (`nosuid,nodev`);
     projeto, dados e `run.json` montados read-only; só `/output` gravável;
     `--cap-drop ALL`; `no-new-privileges`; limites de CPU, memória (sem swap), processos
@@ -861,6 +856,115 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
     reutilizada ou reconstruída, chave divergente). O ponta a ponta com Docker
     (train → promote → serve → predict) roda no job de integração do CI.
 
+### ADR-021 — Validação do projeto, lock e `init`
+
+- **Contexto:** o cientista só fornece código. Quanto mais cedo um erro aparece, mais
+  barato ele é: um pin incompatível descoberto depois de minutos de build, ou um
+  `requests.get` que só falha dentro do container sem rede, são a pior experiência.
+  A validação também é uma fronteira de segurança: o `requirements.txt` é a porta de
+  entrada da supply chain. E nada disso pode executar o código do cientista.
+- **Decisão:**
+  - **dois níveis, tudo de uma vez:** erro viola o contrato e bloqueia; aviso é
+    provável problema e não bloqueia; `--strict` (no `validate` e no `train`)
+    transforma aviso em erro, para o CI. Cada problema traz código estável, local
+    (`arquivo:linha`) e como corrigir;
+  - **só leitura e sem executar:** o código é lido com `ast`, nunca importado, e a
+    partir dos bytes, como o Python lê: BOM e `# coding:` valem; UTF-16 (o `>` do
+    Windows PowerShell 5) é erro com a dica de como salvar em UTF-8. Pasta de projeto
+    inexistente é um erro claro, não um traceback;
+  - **só o que roda no container (R3):** `train.py` e os módulos do projeto que ele
+    importa, seguidos transitivamente (`import utils`, `from features import x`,
+    imports relativos dentro de pacotes), como o runner os encontra com a pasta do
+    projeto no `sys.path`. Testes, scripts e notebooks que o `train.py` não importa
+    ficam fora; sem isso, o `pytest` de `tests/` ou o `requests` de um script de
+    download tornariam o `--strict` inútil no CI. Pastas ocultas e a pasta de dados
+    ficam fora; erro de sintaxe num módulo importado é aviso (o Python só o acusa
+    quando o import roda);
+  - **`requirements.txt` (V1):** parser PEP 508 de referência (`packaging`), com
+    continuação de linha e comentários. Erros:
+    - opções de índice, `-e`, `-r`, `--hash` inline, URLs, VCS e caminhos locais;
+    - sintaxe inválida, com a mensagem do parser;
+    - pacotes da própria plataforma (`mlship-sdk`, `mlship-runtime`);
+    - **conflito com o runtime (V2, estático):** pin exato fora da faixa que o runtime
+      exige (`pandas==2.0.0` contra `pandas>=2.2.2`), com a faixa na mensagem.
+
+    Aviso: versão sem pin exato (faixa ou curinga);
+  - **resolução real (V2):** o `validate` resolve o `requirements.txt` com o runtime
+    usando o mesmo `uv --no-build` do lock, numa pasta temporária: pega pacote
+    inexistente e conflito transitivo, sem escrever no projeto e sem executar sdist.
+    Um `mlship.lock` íntegro e atual já responde, sem rede. `--offline` pula a etapa;
+    ela também é pulada quando o `requirements.txt` já tem erros. Índice inacessível
+    vira um erro próprio (`REQUIREMENTS_INDEX_UNREACHABLE`), para não culpar o arquivo;
+  - **lock commitado e atual (Y3):** o `validate` avisa quando o `mlship.lock` falta
+    (`LOCK_MISSING`), não bate com o `requirements.txt` ou o runtime (`LOCK_STALE`) ou
+    foi editado à mão (`LOCK_MODIFIED`). Com `--strict`, o CI exige um lock commitado
+    e atual, como `uv lock --check` e `npm ci`. O comando `mlship lock` grava o lock
+    sem treinar, depois de validar as dependências; o `train` não emite esses avisos,
+    porque ele mesmo atualiza o lock;
+  - **import sem pacote declarado (V3, aviso):** imports de todos os `.py`, menos
+    stdlib, módulos locais, imports opcionais (`try/except ImportError`,
+    `if TYPE_CHECKING`) e o que o runtime garante. Um mapa curado cobre os nomes que
+    divergem (`sklearn` → `scikit-learn`, `cv2` → `opencv-python`); fora dele, nome
+    igual. Mesma abordagem de deptry e pipreqs;
+  - **código hostil ao container (V6, avisos):** cliente de rede (import ou URL
+    `http(s)://`, `s3://`, `gs://`), caminho absoluto (`/home/…`, `C:\…`, `/dbfs/…`),
+    variável de ambiente com cara de segredo, e trabalho pesado no nível do módulo
+    (`read_csv`, `fit`, `open`, laços) fora de `train()`. São heurísticas: apontam o
+    provável erro e não bloqueiam sozinhas;
+  - **dados (V5):** pasta existe e tem arquivos (ocultos não contam); formato
+    desconhecido é um aviso agregado com exemplos, porque quem lê os dados é o
+    `train.py`;
+  - **saída (V8):** texto para pessoas e `--format json` para CI, com os mesmos
+    campos e `schema_version` para quem consome. Saída `0` válido, `1` bloqueado, `2`
+    erro da ferramenta. O próximo comando sugerido inclui a pasta do projeto;
+  - **`init` (V7):** template mínimo (`train.py` com scikit-learn, `requirements.txt`
+    fixado, `README.md`, `.gitignore` e `data/example.csv` sintético) e o
+    `mlship.lock` já gerado. Sem acesso ao índice, o projeto é criado assim mesmo e a
+    saída indica o `mlship lock`. O projeto criado passa no `validate --strict` e
+    treina como está (testado). Arquivos
+    existentes nunca são sobrescritos sem `--force`, todos listados de uma vez; nada é
+    escrito através de link simbólico;
+  - **limites do runtime (V4):** mínimos relaxados para as menores versões testadas;
+    o job `runtime-lowest` do CI instala o runtime com `--resolution lowest-direct` e
+    roda os testes do runtime.
+- **Alternativas descartadas:**
+  - regex para o `requirements.txt` (como era no E2): aceita linhas inválidas que só
+    quebram no `uv`, longe da linha do erro;
+  - só a resolução do `uv`, sem regras estáticas: mensagem genérica, um erro por vez
+    e dependência de rede para um erro que se vê no texto;
+  - só regras estáticas: não pegam pacote inexistente nem conflito transitivo;
+  - mapear imports pelos metadados dos wheels resolvidos (`top_level.txt`): exato,
+    mas exige resolver e ler metadados de pacotes de terceiros;
+  - rede como erro: falso positivo em import morto ou fallback; o container já
+    bloqueia de fato, e o `--strict` cobre o CI;
+  - formato de dados desconhecido como erro: limitaria o cientista sem motivo;
+  - `init` interativo ou copiando o exemplo California Housing: pior no CI, ou
+    específico demais e dependente de download;
+  - varrer todos os `.py` do projeto (a primeira versão do E5) ou excluir pastas por
+    convenção (`tests/`, `scripts/`): o primeiro gera falso positivo em todo projeto
+    real; o segundo erra em qualquer layout fora da convenção;
+  - SARIF para anotações no PR: fica em "Com mais tempo".
+- **Consequências:**
+  - o fluxo curto `init` → `validate` → `train` funciona numa pasta vazia, sem
+    download;
+  - o mesmo validador roda no `train`: o que passa no `validate --strict` do CI passa
+    no `train --strict`;
+  - as heurísticas podem errar para os dois lados; os códigos são estáveis e
+    documentados, e nenhum aviso bloqueia sem `--strict`;
+  - o mapa de imports é curado: um pacote cujo nome de import difere e não está no
+    mapa gera aviso falso, corrigível com uma linha no mapa;
+  - **limites conhecidos, registrados:** o conflito estático só compara pins exatos;
+    faixas incompatíveis ficam para a resolução real. A resolução usa o índice
+    configurado no `uv` do host (em produção, o proxy de pacotes). Imports dinâmicos
+    (`importlib.import_module("x")`) não entram no grafo. Pacotes de namespace como
+    `google.cloud` recebem a dica genérica `'google'`;
+  - **verificado (E5):** um projeto com vários erros e avisos devolve todos; cada regra
+    com casos positivos e negativos; resolução real com `uv` (pacote inexistente e
+    projeto válido) sem escrever no projeto; `init` (com lock) → `validate --strict
+    --offline` → treino do `train.py` gerado, também no Windows; arquivos em UTF-16,
+    com BOM e latin-1 declarado; `tests/` e `scripts/` fora do grafo; lock ausente,
+    desatualizado e editado; testes do runtime com `numpy` 1.26.4 e `pandas` 2.2.2.
+
 ---
 
 ## Fora de escopo
@@ -892,6 +996,7 @@ Itens fora do escopo do código; todos aparecem no desenho de arquitetura:
   (ADR-019).
 - Comando para registrar de novo um run cujo upload falhou (`mlship register <run>`),
   a partir do que ficou no disco (ADR-019).
+- Saída SARIF no `validate`, para anotar os problemas direto no PR do GitHub (ADR-021).
 - Avaliação feita pela ferramenta: champion e candidato avaliados no mesmo holdout fixo,
   para que o gate de promoção não dependa de métricas calculadas pelo código do
   cientista (ADR-013).
@@ -903,4 +1008,4 @@ Itens fora do escopo do código; todos aparecem no desenho de arquitetura:
 | D1 | 21/10 | | Planejamento, decisões A–D |
 | D2 | 22/10 | | E0: estrutura, tooling, exemplo, CI |
 | D3 | 23/10 | | E1 (lock e imagem) e E2 (treino isolado), revisão |
-| D4 | 24/10 | | E3 (lineage e registro), revisão, testes no Windows, E4 (serving) |
+| D4 | 24/10 | | E3 (lineage e registro), revisão, testes no Windows, E4 (serving), revisão, E5 (validação e `init`) |

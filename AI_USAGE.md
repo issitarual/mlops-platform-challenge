@@ -19,7 +19,7 @@ alternativas, implementou e revisou. As alternativas eram verificadas e revisada
   M3. A IA propôs; eu reordenei e cortei escopo.
 - **Decisões:** para cada escolha relevante, a IA apresentava 2 a 3 alternativas com
   prós, contras e o que o mercado usa, com uma recomendação. **A decisão era minha** e
-  ficou registrada no `DECISIONS.md` (ADR-001 a ADR-020).
+  ficou registrada no `DECISIONS.md` (ADR-001 a ADR-021).
 - **Implementação:** a IA escrevia numa cópia de trabalho, rodava lint, tipos e testes
   e só então copiava para a minha pasta. Eu revisava, rodava localmente e commitava.
 - **Revisão crítica:** ao fim de cada épico, pedi uma revisão "como Staff de MLOps",
@@ -100,6 +100,24 @@ alternativas, implementou e revisou. As alternativas eram verificadas e revisada
   artifact store, sem verificar. Quem tivesse escrita só no bucket trocaria o lock por
   um com pacotes maliciosos. A âncora de confiança passou a ser o banco do MLflow
   (tags do run), e o lock só é usado se o hash bater (ADR-020).
+
+- **Saída da validação engolindo texto do usuário (desde o E2).** Os problemas eram
+  impressos com markup do Rich sem escapar: `'pandas[performance]=2'` aparecia como
+  `'pandas=2'`, justamente na linha que o cientista precisa corrigir. Achado no E5 ao
+  escrever o teste da saída do `validate`; corrigido escapando e redigindo a mensagem.
+- **Limites mínimos do runtime nunca testados.** Ao relaxar `pandas>=3.1.0` para 2.2,
+  a IA rodou os testes com as versões mínimas de fato: `pandas` 2.2.0 emite um
+  `DeprecationWarning` no import que quebra a suíte (avisos são erro). O mínimo ficou
+  em 2.2.2, e um job do CI passou a testar as versões mínimas.
+
+- **Validação que quebrava com arquivos reais do Windows e varria código que não roda
+  (E5).** A revisão crítica, rodando entradas reais, achou: traceback com pasta de
+  projeto inexistente; traceback com `requirements.txt` em UTF-16 (o `>` do Windows
+  PowerShell 5) e com `train.py` em latin-1; erro falso com BOM, que o Python e o `uv`
+  aceitam. E o scan de todos os `.py` do projeto transformava o `pytest` de `tests/`
+  em problema, o que inviabilizava o `--strict` no CI. Os 299 testes estavam verdes.
+  Ficou: leitura a partir dos bytes, como o Python lê; erro claro de codificação;
+  análise só do que o `train.py` importa.
 
 ### Achados em que a IA ajudou a diagnosticar
 

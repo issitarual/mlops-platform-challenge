@@ -24,6 +24,33 @@ uv run pytest tests/unit
 docker compose up -d      # tracking e registry em http://127.0.0.1:5000
 ```
 
+## Começar um projeto
+
+```bash
+uv run mlship init my-model                       # train.py, requirements.txt, lock e dados de exemplo
+uv run mlship validate my-model --data my-model/data
+uv run mlship train my-model --data my-model/data
+```
+
+O projeto criado passa na validação e treina como está; troque o modelo e os dados
+pelos seus. O contrato é só `train.py` com `train(data_dir, params) -> TrainOutput` e
+um `requirements.txt`.
+
+O `validate` lê o código sem executá-lo (o `train.py` e os módulos que ele importa)
+e mostra **todos** os problemas de uma vez, cada um com o local e como corrigir:
+assinatura do `train`, opções proibidas e pins incompatíveis com o runtime no
+`requirements.txt`, imports sem pacote declarado, acesso à rede, caminhos absolutos,
+segredos lidos do ambiente, a pasta de dados e o `mlship.lock` (ausente ou
+desatualizado). Ele também resolve as dependências com o runtime (`--offline` pula
+essa etapa). Avisos não bloqueiam; com `--strict` viram erro.
+
+Depois de mudar o `requirements.txt`, `uv run mlship lock my-model` atualiza o
+`mlship.lock`; commite os dois. Para CI:
+
+```bash
+uv run mlship validate my-model --strict --format json   # saída 0 válido, 1 bloqueado
+```
+
 ## Treinar o exemplo
 
 Requer Docker em execução e alguns GB livres em disco (no Windows, no disco onde o
