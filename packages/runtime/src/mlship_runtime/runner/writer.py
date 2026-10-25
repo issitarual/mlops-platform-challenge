@@ -1,6 +1,7 @@
 """Persist the model in the format its trust level allows (ADR-017)."""
 
 import json
+import platform
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,7 @@ from mlship_runtime.runner.issues import Issue
 
 @dataclass(frozen=True, slots=True)
 class SavedModel:
-    serialization: str  # "skops" (level 1) or "cloudpickle" (level 2)
+    serialization: str
     trusted_types: tuple[str, ...]
 
 
@@ -33,11 +34,17 @@ def save_model(
     from mlflow.models import infer_signature
 
     signature = infer_signature(input_example, predictions)
-    # The environment is the image itself (ADR-005): no requirement inference needed.
+    # The environment is the image itself (ADR-005), so MLflow's environment files are
+    # informational only. An explicit conda_env also stops MLflow from looking for pip,
+    # which the image does not have (it would log a warning on every run).
     common: dict[str, Any] = {
         "signature": signature,
         "input_example": input_example,
-        "pip_requirements": [],
+        "conda_env": {
+            "name": "mlship",
+            "channels": [],
+            "dependencies": [f"python={platform.python_version()}"],
+        },
     }
 
     if _is_sklearn_estimator(model):
