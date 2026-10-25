@@ -109,7 +109,13 @@ def test_success_is_tracked_registered_and_described_by_the_manifest(tmp_path: P
 
     assert run["experiment"] == "demo" and run["status"] is RunStatus.FINISHED
     assert run["params"] == {"alpha": "1", "seed": "42"} and run["metrics"] == {"rmse": 0.5}
-    assert set(run["artifacts"]) == {"model", "manifest.json", "run.json", "result.json"}
+    assert set(run["artifacts"]) == {
+        "model",
+        "manifest.json",
+        "run.json",
+        "result.json",
+        "mlship.lock",
+    }
     assert outcome.model_version is not None and outcome.model_version.version == 1
     assert run["tags"]["mlship.model_version"] == "1"
     assert run["tags"]["mlflow.user"] == "laura", "the MLflow UI shows who trained"

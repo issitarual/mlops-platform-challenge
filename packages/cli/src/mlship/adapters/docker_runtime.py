@@ -4,10 +4,17 @@ The client is created on first use, so building the object never needs a Docker 
 """
 
 import contextlib
+import hashlib
+import json
 import os
+import shutil
 import sys
+import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
+import uuid
 from collections import deque
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -16,9 +23,10 @@ from typing import Any
 import docker
 import docker.errors
 
+from mlship.adapters.dockerfile import render_serving_dockerfile
 from mlship.domain.environment import ImageRef
 from mlship.domain.errors import ContainerRunError, EnvironmentBuildError, ToolNotFoundError
-from mlship.domain.runs import ModelVersion
+from mlship.domain.serving import SERVING_PORT, ServingImageSpec, ServingJobSpec
 from mlship.domain.training import (
     CONFIG_MOUNT,
     CONTAINER_TMP,
@@ -31,8 +39,9 @@ from mlship.domain.training import (
 )
 
 _LOG_TAIL_CHARS = 4_000
-_IMAGE_USER = "10001:10001"  # the non-root user baked into the image
+_IMAGE_USER = "10001:10001"
 _POLL_SECONDS = 0.5
+_READY_TIMEOUT_SECONDS = 180
 _RUNNER_COMMAND = ["python", "-m", "mlship_runtime.runner"]
 _SELFCHECK_COMMAND = ["python", "-m", "mlship_runtime.selfcheck"]
 _SELFCHECK_LIMITS = ResourceLimits(
@@ -68,7 +77,7 @@ def _container_user(output_dir: Path) -> str:
 class DockerRuntime:
     def __init__(self, platform: str, client_factory: Callable[[], Any] = docker.from_env) -> None:
         self._platform = platform
-        self._client_factory = client_factory  # injectable, so error mapping is unit-tested
+        self._client_factory = client_factory
         self._client: Any = None
 
     def _docker(self) -> Any:
@@ -124,7 +133,7 @@ class DockerRuntime:
                 name=f"mlship-train-{spec.run_id[:12]}",
                 labels={"org.mlship.run-id": spec.run_id},
                 user=_container_user(spec.output_dir),
-                environment=dict(spec.environment),  # nothing from the host leaks in
+                environment=dict(spec.environment),
                 volumes={
                     str(spec.project_dir): {"bind": PROJECT_MOUNT, "mode": "ro"},
                     str(spec.data_dir): {"bind": DATA_MOUNT, "mode": "ro"},
@@ -210,10 +219,134 @@ class DockerRuntime:
         with contextlib.suppress(docker.errors.ImageNotFound):
             self._docker().images.remove(tag, force=True)
 
-    def ensure_serving_image(
-        self, base: ImageRef, model: ModelVersion, model_dir: Path
-    ) -> ImageRef:
-        raise NotImplementedError("E4")
+    def ensure_serving_image(self, spec: ServingImageSpec, model_dir: Path) -> ImageRef:
+        """One image per (model version, environment, load policy); built once."""
+        model = spec.model
+        policy = json.dumps([spec.allow_pickle, sorted(spec.skops_trusted_types)])
+        policy_id = hashlib.sha256(policy.encode()).hexdigest()[:8]
+        base_id = spec.base.digest.removeprefix("sha256:")[:12]
+        tag = (
+            f"mlship-serve-{model.name}:"
+            f"v{model.version}-{model.model_sha256[:12]}-{base_id}-{policy_id}"
+        )
+        existing = self.find_image(tag)
+        if existing is not None:
+            return existing
+        labels = {
+            "org.mlship.model-name": model.name,
+            "org.mlship.model-version": str(model.version),
+            "org.mlship.model-sha256": model.model_sha256,
+            "org.mlship.run-id": model.run_id,
+            "org.mlship.base-image": spec.base.tag,
+            "org.mlship.base-image-id": spec.base.digest,
+        }
+        with tempfile.TemporaryDirectory(prefix="mlship-serve-") as tmp:
+            context = Path(tmp)
+            shutil.copytree(model_dir, context / "model")
+            (context / "Dockerfile").write_text(
+                render_serving_dockerfile(spec), encoding="utf-8", newline="\n"
+            )
+            return self.build_image(context, tag, labels)
 
-    def run_serving(self, image: ImageRef, port: int, workers: int) -> None:
-        raise NotImplementedError("E4")
+    def run_serving(
+        self,
+        spec: ServingJobSpec,
+        on_log: Callable[[str], None],
+        on_ready: Callable[[str], None],
+    ) -> None:
+        """Run the API in the foreground; the container is always stopped and removed."""
+        limits = ResourceLimits(
+            cpus=spec.limits.cpus,
+            memory=spec.limits.memory,
+            pids=spec.limits.pids,
+            timeout_seconds=0,
+            tmpfs_size="256m",
+        )
+        options = _locked_down(limits)
+        # The API must receive requests, so it gets a network, published on 127.0.0.1
+        # only. Egress control is a production network concern (security groups, ADR-020).
+        options.pop("network_mode")
+        model = spec.model
+        try:
+            container = self._docker().containers.create(
+                image=spec.image.tag,
+                command=["--port", str(SERVING_PORT), "--workers", str(spec.workers)],
+                name=f"mlship-serve-{model.name}-v{model.version}-{uuid.uuid4().hex[:6]}",
+                labels={"org.mlship.model-name": model.name},
+                user=_IMAGE_USER,
+                environment={"HOME": CONTAINER_TMP, **spec.environment},
+                ports={f"{SERVING_PORT}/tcp": ("127.0.0.1", spec.host_port)},
+                **options,
+            )
+        except docker.errors.APIError as exc:
+            raise ContainerRunError(
+                "Docker could not create the API container.", details=str(exc)
+            ) from exc
+        tail: deque[str] = deque(maxlen=200)
+
+        def pump() -> None:
+            for chunk in container.logs(stream=True, follow=True):
+                text = chunk.decode("utf-8", errors="replace")
+                tail.append(text)
+                on_log(text)
+
+        url = f"http://127.0.0.1:{spec.host_port}"
+        ready = False
+        try:
+            try:
+                container.start()
+            except docker.errors.APIError as exc:
+                raise ContainerRunError(
+                    "Docker could not start the API container.",
+                    hint=f"Is port {spec.host_port} already in use? Choose another with --port.",
+                    details=str(exc),
+                ) from exc
+            reader = threading.Thread(target=pump, daemon=True)
+            reader.start()
+            deadline = time.monotonic() + _READY_TIMEOUT_SECONDS
+            while True:
+                container.reload()
+                if container.status in ("exited", "dead"):
+                    break
+                if not ready:
+                    if _answers_ready(url):
+                        ready = True
+                        on_ready(url)
+                    elif time.monotonic() > deadline:
+                        raise ContainerRunError(
+                            f"The API did not become ready in {_READY_TIMEOUT_SECONDS}s.",
+                            details="".join(tail)[-_LOG_TAIL_CHARS:],
+                        )
+                time.sleep(_POLL_SECONDS)
+            reader.join(timeout=5)
+            state = container.attrs.get("State", {})
+            exit_code = int(state.get("ExitCode", 1))
+            if not ready:
+                raise ContainerRunError(
+                    f"The API stopped before it was ready (exit code {exit_code}).",
+                    hint="The log above has the cause, e.g. a model that fails its integrity "
+                    "or load-policy check.",
+                    details="".join(tail)[-_LOG_TAIL_CHARS:],
+                )
+            raise ContainerRunError(
+                f"The API stopped while serving (exit code {exit_code}).",
+                hint="It ran out of memory: raise MLSHIP_SERVE_MEMORY_LIMIT."
+                if state.get("OOMKilled")
+                else "The log above has the cause; it may also have been stopped from outside.",
+                details="".join(tail)[-_LOG_TAIL_CHARS:],
+            )
+        finally:
+            with contextlib.suppress(docker.errors.APIError):
+                container.stop(timeout=10)
+            with contextlib.suppress(docker.errors.APIError):
+                container.remove(force=True)
+
+
+def _answers_ready(base_url: str) -> bool:
+    """Readiness as a load balancer sees it: ``GET /health/ready`` answers 200."""
+    try:
+        # Fixed scheme and host (http://127.0.0.1): only ever the local container.
+        with urllib.request.urlopen(f"{base_url}/health/ready", timeout=2) as response:  # noqa: S310
+            return bool(response.status == 200)
+    except (urllib.error.URLError, OSError):
+        return False

@@ -149,3 +149,17 @@ def test_missing_version_or_model_is_not_found(
     with pytest.raises(ModelNotFoundError):
         registry.get_version("no-such-model", 1)
     assert registry.get_alias("no-such-model", "champion") is None
+
+
+def test_artifacts_and_model_files_can_be_downloaded(
+    runs: MlflowRunRepository, registry: MlflowModelRegistry, name: str, tmp_path: Path
+) -> None:
+    run_id = _tracked_run(runs, name, tmp_path / "src")
+    version = registry.register(name, run_id, "aaa")
+    target = tmp_path / "download"
+    manifest = runs.download_artifact(run_id, "manifest.json", target)
+    assert manifest is not None and manifest.read_text() == "{}"
+    assert runs.download_artifact(run_id, "missing.json", target) is None
+    model_dir = registry.download(version, target)
+    assert (model_dir / "nested" / "weights.bin").read_bytes() == b"\x00\x01"
+    assert runs.get_tags(run_id)["mlship.code_sha256"] == "c0de"

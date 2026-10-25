@@ -61,6 +61,20 @@ class RecordingTrainingRuntime(FakeContainerRuntime):
         return TrainingJobResult(self.exit_code, False, False, "training...\n")
 
 
+def make_environment(
+    runtime: FakeContainerRuntime, packager: FakeRuntimePackager | None = None
+) -> EnvironmentService:
+    return EnvironmentService(
+        FakeLockResolver(),
+        packager or FakeRuntimePackager(),
+        FakeDockerfile(),
+        runtime,
+        python_version="3.12",
+        python_platform="x86_64-manylinux_2_28",
+        docker_platform="linux/amd64",
+    )
+
+
 def make_service(
     runtime: RecordingTrainingRuntime,
     *,
@@ -70,15 +84,7 @@ def make_service(
     model_max_bytes: int = 10**6,
     model_max_files: int = 100,
 ) -> TrainingService:
-    environment = EnvironmentService(
-        FakeLockResolver(),
-        FakeRuntimePackager(),
-        FakeDockerfile(),
-        runtime,
-        python_version="3.12",
-        python_platform="x86_64-manylinux_2_28",
-        docker_platform="linux/amd64",
-    )
+    environment = make_environment(runtime)
     policy = TrainingPolicy(
         LIMITS,
         ("a.B",),

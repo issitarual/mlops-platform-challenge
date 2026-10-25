@@ -115,6 +115,9 @@ class FakeContainer:
     def wait(self, timeout: int) -> dict[str, int]:
         return {"StatusCode": self.attrs["State"]["ExitCode"]}
 
+    def stop(self, timeout: int) -> None:
+        self.status = "exited"
+
     def remove(self, force: bool) -> None:
         self.removed = True
 
@@ -228,3 +231,100 @@ def test_selfcheck_failure_returns_the_log() -> None:
     failure = runtime.verify_image("mlship-env:abc")
     assert failure is not None and "exit code 1" in failure and "hello" in failure
     assert container.removed
+
+
+# --- serving: image per version and a locked-down API container ---------------------
+
+from mlship.adapters import docker_runtime  # noqa: E402
+from mlship.domain.runs import ModelVersion  # noqa: E402
+from mlship.domain.serving import (  # noqa: E402
+    ServingImageSpec,
+    ServingJobSpec,
+    ServingLimits,
+)
+
+MODEL = ModelVersion("demo", 2, "run1", "a" * 64)
+
+
+def _serving_spec(port: int = 9000) -> ServingJobSpec:
+    return ServingJobSpec(
+        image=ImageRef("mlship-serve-demo:v2", "sha256:s"),
+        model=MODEL,
+        host_port=port,
+        workers=2,
+        environment={"MLSHIP_SERVING_API_KEY": "k"},
+        limits=ServingLimits(cpus=1.0, memory="1g", pids=64),
+    )
+
+
+def test_serving_image_bakes_the_verified_model_and_is_built_once(tmp_path: Path) -> None:
+    images = FakeImages()
+    runtime = _runtime(images)
+    (tmp_path / "model").mkdir()
+    (tmp_path / "model" / "MLmodel").write_text("x")
+    spec = ServingImageSpec(ImageRef("mlship-env:abc", "sha256:" + "b" * 64), MODEL, False, ())
+    image = runtime.ensure_serving_image(spec, tmp_path / "model")
+    assert image.tag.startswith("mlship-serve-demo:v2-aaaaaaaaaaaa-bbbbbbbbbbbb-")
+    assert images.build_kwargs["labels"]["org.mlship.model-sha256"] == "a" * 64
+
+    images.present = True  # now it exists: no second build
+    images.build_kwargs = {}
+    runtime.ensure_serving_image(spec, tmp_path / "model")
+    assert images.build_kwargs == {}
+
+
+def test_api_container_is_locked_down_and_only_published_on_localhost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(docker_runtime, "_answers_ready", lambda _: True)
+    container = FakeContainer(["running", "running", "exited"])
+    runtime, containers = _training_runtime(container)
+    ready: list[str] = []
+    with pytest.raises(ContainerRunError, match="while serving"):
+        runtime.run_serving(_serving_spec(), lambda _: None, ready.append)
+    kw = containers.create_kwargs
+    assert kw["ports"] == {"8080/tcp": ("127.0.0.1", 9000)}
+    assert "network_mode" not in kw, "the API needs a network to receive requests"
+    assert kw["read_only"] is True and kw["cap_drop"] == ["ALL"]
+    assert kw["security_opt"] == ["no-new-privileges"] and kw["user"] == "10001:10001"
+    assert kw["command"] == ["--port", "8080", "--workers", "2"]
+    assert kw["environment"] == {"HOME": "/tmp", "MLSHIP_SERVING_API_KEY": "k"}
+    assert ready == ["http://127.0.0.1:9000"] and container.removed
+
+
+def test_api_that_dies_before_ready_is_an_error_with_its_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(docker_runtime, "_answers_ready", lambda _: False)
+    container = FakeContainer(["exited"], exit_code=3)
+    runtime, _ = _training_runtime(container)
+    with pytest.raises(ContainerRunError, match="before it was ready") as info:
+        runtime.run_serving(_serving_spec(), lambda _: None, lambda _: None)
+    assert "hello" in info.value.details
+    assert container.removed
+
+
+def test_api_killed_for_memory_says_which_limit_to_raise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(docker_runtime, "_answers_ready", lambda _: True)
+    container = FakeContainer(["running", "exited"], exit_code=137)
+    container.attrs["State"]["OOMKilled"] = True
+    runtime, _ = _training_runtime(container)
+    with pytest.raises(ContainerRunError, match="exit code 137") as info:
+        runtime.run_serving(_serving_spec(), lambda _: None, lambda _: None)
+    assert "MLSHIP_SERVE_MEMORY_LIMIT" in info.value.hint
+    assert container.removed
+
+
+def test_cleanup_errors_never_hide_the_original_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(docker_runtime, "_answers_ready", lambda _: False)
+    container = FakeContainer(["exited"], exit_code=3)
+
+    def already_gone(force: bool) -> None:
+        raise docker.errors.NotFound("no such container")
+
+    container.remove = already_gone  # type: ignore[method-assign]
+    runtime, _ = _training_runtime(container)
+    with pytest.raises(ContainerRunError, match="before it was ready"):
+        runtime.run_serving(_serving_spec(), lambda _: None, lambda _: None)

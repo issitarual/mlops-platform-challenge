@@ -11,6 +11,7 @@ from rich.table import Table
 from mlship.domain.errors import MlshipError
 from mlship.domain.redaction import redact
 from mlship.domain.runs import Promotion, RunRecord, RunStatus
+from mlship.domain.serving import PreparedServing
 from mlship.domain.training import TrainingOutcome
 from mlship.domain.validation import Severity, ValidationIssue, ValidationReport
 
@@ -153,3 +154,38 @@ def promotion(result: Promotion) -> None:
         "[dim]No automatic comparison with the previous version yet; "
         "check the metrics with `mlship runs`. Serving picks this up on the next deploy.[/dim]"
     )
+
+
+def serving_started(model_name: str, alias: str) -> None:
+    err_console.print(
+        f"Resolving [bold]{alias}[/bold] of [bold]{model_name}[/bold], "
+        "then verifying and packaging the model…"
+    )
+
+
+def serving_prepared(prepared: PreparedServing) -> None:
+    model = prepared.model
+    source = "reused" if prepared.environment_reused else "rebuilt from the run's lock"
+    err_console.print(
+        f"{prepared.alias} → [bold]{model.name} v{model.version}[/bold] "
+        f"(run {model.run_id[:12]}, sha256 {model.model_sha256[:12]}… verified)\n"
+        f"Environment [cyan]{prepared.environment_image.tag}[/cyan] ({source})\n"
+        f"Serving image [cyan]{prepared.serving_image.tag}[/cyan]",
+        highlight=False,
+    )
+
+
+def serving_log(text: str) -> None:
+    err_console.out(text, end="", style="dim", highlight=False)
+
+
+def serving_ready(url: str) -> None:
+    console.print(
+        f"\n[green]Ready[/green]: {url}/v1/predict  ·  docs {url}/docs  ·  metrics {url}/metrics"
+        "\nPress Ctrl+C to stop.\n",
+        highlight=False,
+    )
+
+
+def serving_stopped() -> None:
+    err_console.print("\n[yellow]Stopped[/yellow]; the API container was removed.")

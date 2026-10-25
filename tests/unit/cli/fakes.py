@@ -1,5 +1,7 @@
 """In-memory implementations of the ports, for service tests without Docker or uv."""
 
+import shutil
+import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -8,6 +10,7 @@ from typing import Any
 from mlship.domain.environment import ImageRef
 from mlship.domain.errors import ModelNotFoundError, TrackingUnavailableError
 from mlship.domain.runs import ModelVersion, RunRecord, RunStatus, ToolInfo
+from mlship.domain.serving import ServingImageSpec, ServingJobSpec
 from mlship.domain.training import TrainingJobResult, TrainingJobSpec
 
 
@@ -54,6 +57,8 @@ class FakeContainerRuntime:
         self.builds: list[tuple[str, dict[str, str], list[str]]] = []
         self.selfcheck_failure = selfcheck_failure
         self.verified: list[str] = []
+        self.serving_specs: list[tuple[ServingImageSpec, list[str]]] = []
+        self.serving_jobs: list[ServingJobSpec] = []
 
     def find_image(self, tag: str) -> ImageRef | None:
         return self.images.get(tag)
@@ -77,13 +82,19 @@ class FakeContainerRuntime:
     ) -> TrainingJobResult:
         raise NotImplementedError
 
-    def ensure_serving_image(
-        self, base: ImageRef, model: ModelVersion, model_dir: Path
-    ) -> ImageRef:
-        raise NotImplementedError
+    def ensure_serving_image(self, spec: ServingImageSpec, model_dir: Path) -> ImageRef:
+        self.serving_specs.append((spec, sorted(p.name for p in model_dir.rglob("*"))))
+        tag = f"mlship-serve-{spec.model.name}:v{spec.model.version}"
+        return self.images.setdefault(tag, ImageRef(tag, f"sha256:serve{spec.model.version}"))
 
-    def run_serving(self, image: ImageRef, port: int, workers: int) -> None:
-        raise NotImplementedError
+    def run_serving(
+        self,
+        spec: ServingJobSpec,
+        on_log: Callable[[str], None],
+        on_ready: Callable[[str], None],
+    ) -> None:
+        self.serving_jobs.append(spec)
+        on_ready(f"http://127.0.0.1:{spec.host_port}")
 
 
 class FakeRunRepository:
@@ -93,6 +104,9 @@ class FakeRunRepository:
         self.available = available
         self.runs: dict[str, dict[str, Any]] = {}
         self.checks = 0
+        # Uploaded artifacts are copied, like an artifact store: later local changes
+        # do not affect them, and tests can tamper with the "store" itself.
+        self.store = Path(tempfile.mkdtemp(prefix="fake-artifacts-"))
 
     def check_available(self) -> None:
         self.checks += 1
@@ -125,10 +139,28 @@ class FakeRunRepository:
         run["metrics"].update(metrics)
         run["tags"].update(tags)
         run["artifacts"].update(artifacts)
+        for name, source in artifacts.items():
+            target = self.store / run_id / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if source.is_dir():
+                shutil.copytree(source, target)
+            else:
+                shutil.copyfile(source, target)
 
     def end(self, run_id: str, status: RunStatus, tags: Mapping[str, str]) -> None:
         self.runs[run_id]["status"] = status
         self.runs[run_id]["tags"].update(tags)
+
+    def get_tags(self, run_id: str) -> Mapping[str, str]:
+        return dict(self.runs[run_id]["tags"])
+
+    def download_artifact(self, run_id: str, path: str, target_dir: Path) -> Path | None:
+        source = self.store / run_id / path
+        if not source.exists():
+            return None
+        target_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target_dir / path)
+        return target_dir / path
 
     def list_recent(self, experiment: str, limit: int) -> Sequence[RunRecord]:
         return [
@@ -141,7 +173,8 @@ class FakeRunRepository:
 
 
 class FakeModelRegistry:
-    def __init__(self) -> None:
+    def __init__(self, runs: "FakeRunRepository | None" = None) -> None:
+        self.runs = runs  # where download() finds the model files
         self.versions: dict[str, list[ModelVersion]] = {}
         self.aliases: dict[tuple[str, str], int] = {}
         self.version_tags: dict[tuple[str, int], dict[str, str]] = {}
@@ -167,7 +200,10 @@ class FakeModelRegistry:
         self.version_tags.setdefault((name, version), {}).update(tags)
 
     def download(self, model: ModelVersion, target_dir: Path) -> Path:
-        raise NotImplementedError
+        assert self.runs is not None, "give the registry the run repository to download"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(self.runs.store / model.run_id / "model", target_dir / "model")
+        return target_dir / "model"
 
 
 class FakeToolInfo:
