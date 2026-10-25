@@ -29,6 +29,25 @@ jobs:
       - name: Unit tests
         run: uv run pytest tests/unit
 
+  runtime-lowest:
+    # The runtime is installed next to the scientist's pins (ADR-021): its declared
+    # minimum versions must really work, not only the newer ones in uv.lock.
+    needs: lint-and-unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+        with:
+          enable-cache: true
+      - name: Install the runtime at its lowest declared versions
+        run: |
+          uv venv --python 3.12 .venv-lowest
+          uv pip install --python .venv-lowest --resolution lowest-direct --no-build \
+            -e packages/sdk -e packages/runtime --group dev
+      - name: Runtime and sdk unit tests
+        run: .venv-lowest/bin/python -m pytest tests/unit/runtime tests/unit/sdk
+
   integration:
     # Real uv resolution (PyPI) and a real Docker build of the environment image.
     needs: lint-and-unit
