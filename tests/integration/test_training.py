@@ -3,7 +3,10 @@
 Run with: uv run pytest -m integration tests/integration -v
 """
 
+import json
+import os
 import shutil
+import uuid
 from pathlib import Path
 
 import pytest
@@ -79,17 +82,44 @@ def _project(root: Path, train_py: str) -> tuple[Path, Path]:
     return project, data
 
 
-def _train(project: Path, data: Path, **settings: object) -> TrainingOutcome:
-    return build_services(Settings(**settings)).training.train(project, data, {})  # type: ignore[arg-type]
+def _settings(root: Path, **overrides: object) -> Settings:
+    """CI points MLSHIP_TRACKING_URI at the compose server; otherwise a local SQLite store."""
+    if "MLSHIP_TRACKING_URI" in os.environ:
+        return Settings(**overrides)  # type: ignore[arg-type]
+    store = {
+        "tracking_uri": f"sqlite:///{(root / 'mlflow.db').as_posix()}",
+        "artifact_root": (root / "artifacts").as_uri(),
+    }
+    return Settings(**store, **overrides)  # type: ignore[arg-type]
 
 
-def test_example_trains_in_the_container(tmp_path: Path) -> None:
+def _train(project: Path, data: Path, **overrides: object) -> TrainingOutcome:
+    services = build_services(_settings(project.parent, **overrides))
+    return services.training.train(project, data, {}, model_name=_model_name())
+
+
+def _model_name() -> str:
+    return f"it-{os.getpid()}-{uuid.uuid4().hex[:6]}"
+
+
+def test_example_trains_registers_and_promotes(tmp_path: Path) -> None:
     project, data = _project(tmp_path, (EXAMPLE / "train.py").read_text())
-    outcome = _train(project, data)
+    services = build_services(_settings(tmp_path))
+    name = _model_name()
+    outcome = services.training.train(project, data, {}, model_name=name)
+
     assert outcome.succeeded, outcome.issues
     assert set(outcome.metrics) == {"rmse", "mae", "r2"}
     assert outcome.serialization == "skops"
-    assert (outcome.run_dir / "output" / "model" / "MLmodel").is_file()
+    manifest = json.loads((outcome.run_dir / "manifest.json").read_text())
+    assert manifest["model"]["files"]["MLmodel"]
+    version = outcome.model_version
+    assert version is not None and version.model_sha256 == manifest["model"]["sha256"]
+
+    promotion = services.registry.promote(name, version.version, "champion")
+    assert promotion.current.version == version.version
+    (record,) = services.registry.list_runs(name, limit=5)
+    assert record.run_id == outcome.run_id and record.model_version == version.version
 
 
 def test_the_container_is_isolated(tmp_path: Path) -> None:

@@ -1,10 +1,13 @@
 """In-memory implementations of the ports, for service tests without Docker or uv."""
 
 from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from mlship.domain.environment import ImageRef
-from mlship.domain.runs import ModelVersion
+from mlship.domain.errors import ModelNotFoundError, TrackingUnavailableError
+from mlship.domain.runs import ModelVersion, RunRecord, RunStatus, ToolInfo
 from mlship.domain.training import TrainingJobResult, TrainingJobSpec
 
 
@@ -81,3 +84,92 @@ class FakeContainerRuntime:
 
     def run_serving(self, image: ImageRef, port: int, workers: int) -> None:
         raise NotImplementedError
+
+
+class FakeRunRepository:
+    """In-memory tracking: records every call, like an MLflow server would keep it."""
+
+    def __init__(self, available: bool = True) -> None:
+        self.available = available
+        self.runs: dict[str, dict[str, Any]] = {}
+        self.checks = 0
+
+    def check_available(self) -> None:
+        self.checks += 1
+        if not self.available:
+            raise TrackingUnavailableError("MLflow is not reachable.", hint="start it")
+
+    def start(self, experiment: str, tags: Mapping[str, str]) -> str:
+        run_id = f"{len(self.runs) + 1:032x}"
+        self.runs[run_id] = {
+            "experiment": experiment,
+            "status": RunStatus.RUNNING,
+            "tags": dict(tags),
+            "params": {},
+            "metrics": {},
+            "artifacts": {},
+        }
+        return run_id
+
+    def log(
+        self,
+        run_id: str,
+        *,
+        params: Mapping[str, str],
+        metrics: Mapping[str, float],
+        tags: Mapping[str, str],
+        artifacts: Mapping[str, Path],
+    ) -> None:
+        run = self.runs[run_id]
+        run["params"].update(params)
+        run["metrics"].update(metrics)
+        run["tags"].update(tags)
+        run["artifacts"].update(artifacts)
+
+    def end(self, run_id: str, status: RunStatus, tags: Mapping[str, str]) -> None:
+        self.runs[run_id]["status"] = status
+        self.runs[run_id]["tags"].update(tags)
+
+    def list_recent(self, experiment: str, limit: int) -> Sequence[RunRecord]:
+        return [
+            RunRecord(
+                run_id, datetime(2026, 10, 23, tzinfo=UTC), run["status"], run["metrics"], None
+            )
+            for run_id, run in reversed(self.runs.items())
+            if run["experiment"] == experiment
+        ][:limit]
+
+
+class FakeModelRegistry:
+    def __init__(self) -> None:
+        self.versions: dict[str, list[ModelVersion]] = {}
+        self.aliases: dict[tuple[str, str], int] = {}
+        self.version_tags: dict[tuple[str, int], dict[str, str]] = {}
+
+    def register(self, name: str, run_id: str, model_sha256: str) -> ModelVersion:
+        versions = self.versions.setdefault(name, [])
+        created = ModelVersion(name, len(versions) + 1, run_id, model_sha256)
+        versions.append(created)
+        return created
+
+    def get_version(self, name: str, version: int) -> ModelVersion:
+        for candidate in self.versions.get(name, []):
+            if candidate.version == version:
+                return candidate
+        raise ModelNotFoundError(f"{name} has no version {version}.")
+
+    def get_alias(self, name: str, alias: str) -> ModelVersion | None:
+        version = self.aliases.get((name, alias))
+        return None if version is None else self.get_version(name, version)
+
+    def set_alias(self, name: str, alias: str, version: int, tags: Mapping[str, str]) -> None:
+        self.aliases[(name, alias)] = version
+        self.version_tags.setdefault((name, version), {}).update(tags)
+
+    def download(self, model: ModelVersion, target_dir: Path) -> Path:
+        raise NotImplementedError
+
+
+class FakeToolInfo:
+    def info(self) -> ToolInfo:
+        return ToolInfo("0.1.0", "abc123", False)

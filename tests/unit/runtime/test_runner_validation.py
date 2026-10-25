@@ -60,3 +60,13 @@ def test_prediction_count_must_match_rows() -> None:
 def test_metrics_must_be_a_mapping() -> None:
     output = TrainOutput(model=MODEL, metrics=cast(Any, [0.1]), input_example=X)
     assert codes(output) == {"METRICS_TYPE"}
+
+
+def test_metric_names_mlflow_would_refuse_are_reported() -> None:
+    output = TrainOutput(model=MODEL, metrics={"rmse (test)": 0.5, "ok": 0.1}, input_example=X)
+    assert codes(output) == {"METRIC_NAME_INVALID"}
+
+
+def test_too_many_metrics_are_reported() -> None:
+    metrics = {f"m{i}": 0.1 for i in range(101)}
+    assert codes(TrainOutput(model=MODEL, metrics=metrics, input_example=X)) == {"METRICS_TOO_MANY"}

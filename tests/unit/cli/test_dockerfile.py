@@ -9,6 +9,7 @@ def test_rendered_dockerfile_enforces_the_install_policy() -> None:
     assert text.count("pip uninstall --yes pip") == 2  # build venv and final image
     assert "USER 10001:10001" in text
     assert "MLFLOW_DISABLE_AGENT_HINT=1" in text
+    assert "MLFLOW_DISABLE_TELEMETRY=true" in text
     assert "$PATH" in text and "$$" not in text
     assert not any(
         line.endswith("\\\\") for line in text.splitlines()

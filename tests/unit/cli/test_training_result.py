@@ -82,8 +82,19 @@ def test_untrusted_fields_are_sanitized(output: Path) -> None:
     parsed = _parse(output, payload)
     assert len(parsed.issues[0].message) == MAX_TEXT
     assert parsed.issues[0].hint == ""
-    assert parsed.metrics == {"ok": 1.0}
+    assert parsed.metrics == {}, "a result that breaks the metric contract keeps no metrics"
+    assert "RESULT_METRICS_INVALID" in {i.code for i in parsed.issues}
     assert parsed.serialization is None
+
+
+@pytest.mark.parametrize(
+    "metrics",
+    [{"rmse (test)": 0.5}, {"../escape": 0.5}, {f"m{i}": 0.1 for i in range(101)}],
+)
+def test_metrics_that_mlflow_would_reject_fail_the_run(output: Path, metrics: object) -> None:
+    parsed = _parse(output, {**GOOD, "metrics": metrics})
+    assert not parsed.succeeded
+    assert [i.code for i in parsed.issues] == ["RESULT_METRICS_INVALID"]
 
 
 def test_success_claim_without_model_is_inconsistent(tmp_path: Path) -> None:

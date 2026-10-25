@@ -14,5 +14,5 @@ def test_help_lists_every_command() -> None:
 
 
 def test_unimplemented_command_exits_with_error() -> None:
-    result = runner.invoke(app, ["runs"])
+    result = runner.invoke(app, ["serve"])
     assert result.exit_code == 1
