@@ -67,3 +67,19 @@ markers = [
     "integration: needs Docker or the MLflow server",
     "e2e: full init -> serve -> predict flow",
 ]
+# Any new warning fails the suite: versions are locked, so a new one only appears
+# when the lock changes, and is looked at then. Known ones, all from third-party code:
+filterwarnings = [
+    "error",
+    # MLflow 3.17 on pandas 3: deprecated comparison inside mlflow.models.utils.
+    "ignore:Operation with range is deprecated",
+    # MLflow 3.17 on SQLAlchemy 2.1 (test-only SQLite store).
+    "ignore:The ``noload`` loader strategy is deprecated",
+    # MLflow hints on import and on PredictOnlyModel, which has no type hints on
+    # purpose: MLflow would read them as a schema and transform the inputs (ADR-017).
+    "ignore:.*Any type hint is inferred as AnyType",
+    "ignore:.*Add type hints to the `predict` method",
+    # MLflow hint for integer columns in the test fixture; for users this is a
+    # train/serve skew risk, surfaced as a run warning in E5.
+    "ignore:.*Inferred schema contains integer column",
+]

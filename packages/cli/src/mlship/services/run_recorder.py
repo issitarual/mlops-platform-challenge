@@ -1,6 +1,7 @@
 """The tracking side of a training run: open, record, register, close (ADR-019)."""
 
 import contextlib
+from collections.abc import Callable
 from dataclasses import replace
 
 from mlship.domain.errors import MlshipError
@@ -13,9 +14,15 @@ ERROR_TAG = "mlship.error"
 
 
 class RunRecorder:
-    def __init__(self, run_repository: RunRepository, model_registry: ModelRegistry) -> None:
+    def __init__(
+        self,
+        run_repository: RunRepository,
+        model_registry: ModelRegistry,
+        actor: Callable[[], str] = lambda: "unknown",
+    ) -> None:
         self._runs = run_repository
         self._registry = model_registry
+        self._actor = actor  # who trains: OS user locally, IAM principal in production
 
     def check_available(self) -> None:
         self._runs.check_available()
@@ -24,6 +31,7 @@ class RunRecorder:
         return self._runs.start(
             model_name,
             tags={
+                "mlflow.user": self._actor(),  # standard tag: "User" column in the MLflow UI
                 "mlship.model_name": model_name,
                 "mlship.tool_version": tool.version,
                 "mlship.tool_git_sha": tool.git_sha,

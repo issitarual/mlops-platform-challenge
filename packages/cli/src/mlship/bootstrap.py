@@ -56,7 +56,7 @@ def build_services(settings: Settings) -> Services:
             validator,
             environment,
             container_runtime,
-            RunRecorder(run_repository, model_registry),
+            RunRecorder(run_repository, model_registry, actor=_current_user),
             Sha256Hasher(),
             GitToolInfo(),
             TrainingPolicy(

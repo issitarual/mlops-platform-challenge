@@ -93,6 +93,7 @@ def make_service(
         RunRecorder(
             runs if runs is not None else FakeRunRepository(),
             registry if registry is not None else FakeModelRegistry(),
+            actor=lambda: "laura",
         ),
         Sha256Hasher(),
         FakeToolInfo(),

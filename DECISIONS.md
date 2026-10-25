@@ -636,7 +636,8 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
     `cap_drop ALL`, `no-new-privileges`, memória sem swap, limites de CPU e processos;
   - os mesmos comportamentos, com a imagem Python real, são cobertos por testes de
     integração (treino do exemplo, sonda de isolamento em Python, timeout) que rodam no
-    CI e localmente;
+    CI (Linux) e passaram também no Windows com Docker Desktop (24/10), junto com o
+    self-check da imagem;
   - sem rede, os dados precisam estar no disco antes do treino (ADR-010);
   - `/tmp` não usa `noexec`, porque algumas bibliotecas executam arquivos temporários;
   - o timeout é verificado a cada 0,5 s;
@@ -697,7 +698,9 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
     recebe o número da versão;
   - **promoção:** `mlship promote <versão> --alias champion` só move o ponteiro e grava
     na versão quem promoveu (usuário do sistema), quando e qual versão foi substituída.
-    `latest` é reservado e recusado; promover a versão que já tem o alias não muda nada;
+    `latest` é reservado e recusado; promover a versão que já tem o alias não muda nada.
+    O run também recebe a tag padrão `mlflow.user` (quem treinou), que a interface do
+    MLflow mostra na coluna "User";
   - **`mlship runs`:** os runs do modelo, do mais novo ao mais antigo, com status,
     versão e métricas;
   - **o run nunca fica `RUNNING` por engano:** qualquer exceção, inclusive Ctrl+C

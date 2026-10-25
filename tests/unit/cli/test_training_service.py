@@ -112,6 +112,7 @@ def test_success_is_tracked_registered_and_described_by_the_manifest(tmp_path: P
     assert set(run["artifacts"]) == {"model", "manifest.json", "run.json", "result.json"}
     assert outcome.model_version is not None and outcome.model_version.version == 1
     assert run["tags"]["mlship.model_version"] == "1"
+    assert run["tags"]["mlflow.user"] == "laura", "the MLflow UI shows who trained"
 
     model_files = {"MLmodel": sha256_file(outcome.run_dir / "output" / "model" / "MLmodel")}
     assert manifest["model"]["files"] == model_files

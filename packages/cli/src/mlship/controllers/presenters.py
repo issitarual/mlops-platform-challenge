@@ -84,7 +84,7 @@ def training_outcome(outcome: TrainingOutcome) -> None:
         issues(outcome.issues)
         err_console.print(f"\nRun files: {outcome.run_dir}", highlight=False)
         return
-    table = Table("metric", "value", title=f"Run {outcome.run_id}", title_justify="left")
+    table = Table("metric", "value", title=f"Run {outcome.run_id[:12]}", title_justify="left")
     for name, value in sorted(outcome.metrics.items()):
         table.add_row(name, f"{value:.6g}")
     console.print(table)
@@ -114,17 +114,17 @@ def runs_table(model_name: str, records: Sequence[RunRecord]) -> None:
     metric_names = sorted({name for record in records for name in record.metrics})
     table = Table(
         "run",
-        "started (UTC)",
+        "started",
         "status",
         "version",
         *metric_names,
-        title=model_name,
+        title=f"{model_name} (times in UTC)",
         title_justify="left",
     )
     for record in records:
         table.add_row(
             record.run_id[:12],
-            record.created_at.strftime("%Y-%m-%d %H:%M"),
+            record.created_at.strftime("%m-%d %H:%M"),
             _STATUS_STYLE.get(record.status, str(record.status)),
             "" if record.model_version is None else f"v{record.model_version}",
             *(
