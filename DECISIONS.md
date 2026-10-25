@@ -25,6 +25,7 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
 | [016](#adr-016--observabilidade-do-serving-e-referência-para-drift) | Observabilidade do serving e referência para drift | Aceita (dashboard P1, referência P2) |
 | [017](#adr-017--formatos-de-modelo-por-nível-de-confiança) | Formatos de modelo por nível de confiança | Aceita (níveis 1 e 2; nível 3 no desenho) |
 | [018](#adr-018--treino-isolado-e-contrato-com-o-runner) | Treino isolado e contrato com o runner | Aceita |
+| [019](#adr-019--lineage-registro-e-promoção) | Lineage, registro e promoção | Aceita |
 
 **Decisões previstas**, registradas quando implementadas:
 
@@ -284,12 +285,33 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
 
 ### ADR-008 — MLflow local com SQLite
 
-- **Decisão:** servidor MLflow via `compose.yaml`, com backend SQLite e artefatos em
-  volume local; URI de artefatos configurável para S3.
-- **Alternativas descartadas:** o mesmo com MinIO imitando o S3: cerca de meio dia de
-  trabalho por pouco ganho na demonstração.
-- **Consequências:** setup de um comando. A imagem `ghcr.io/mlflow/mlflow:v3.17.2`
-  acompanha a versão do cliente no lock; ainda falta confirmar a tag e fixar por digest (E3).
+- **Decisão:**
+  - servidor MLflow via `compose.yaml`, com backend SQLite e artefatos em volume
+    nomeado. É o padrão do CLI (`MLSHIP_TRACKING_URI=http://127.0.0.1:5000`);
+  - o servidor faz **proxy dos artefatos** (`--artifacts-destination`): o CLI envia o
+    modelo pelo servidor e nunca recebe credencial do armazenamento. Trocar o volume
+    pelo S3 muda só a configuração do servidor, como no MLflow gerenciado do SageMaker;
+  - os testes unitários usam o mesmo código com SQLite direto (sem servidor). Os mesmos
+    testes rodam contra um servidor com `MLSHIP_TEST_TRACKING_URI`.
+- **Alternativas descartadas:**
+  - o mesmo com MinIO imitando o S3: cerca de meio dia de trabalho por pouco ganho na
+    demonstração;
+  - SQLite direto como padrão, sem servidor: zero infraestrutura, mas o cliente
+    gravaria os artefatos no destino; em produção, precisaria de credencial do S3 em
+    cada máquina que treina;
+  - backend em arquivo (`./mlruns`): no MLflow 3.17 está em "maintenance mode" e o
+    cliente recusa usá-lo sem uma variável de opt-out.
+- **Consequências:**
+  - setup de um comando (`docker compose up -d`), com healthcheck;
+  - o servidor não tem autenticação: só escuta em `127.0.0.1`. Em produção, o MLflow
+    gerenciado do SageMaker usa IAM;
+  - o `mlflow-skinny` não traz `sqlalchemy` nem `alembic`; os dois entram só como
+    dependências de desenvolvimento, para os testes com SQLite;
+  - **verificado (E3):** os testes dos repositórios passam com SQLite e contra um
+    `mlflow server` 3.17.2 real por HTTP, com artefatos indo para o destino do servidor;
+  - a imagem `ghcr.io/mlflow/mlflow:v3.17.2` acompanha a versão do cliente no lock;
+    ainda falta fixá-la por digest (o ambiente de desenvolvimento da IA não alcança o
+    registry).
 
 ### ADR-009 — Docker SDK para Python
 
@@ -450,7 +472,7 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
   | O quê | Mecanismo | Identificador | Onde fica | ADR |
   | --- | --- | --- | --- | --- |
   | Ferramenta | Semantic Versioning + commit | versão + git sha | manifesto | 015 |
-  | Código do cientista | hash de `train.py`, `requirements.txt` e demais `.py` do projeto | SHA-256 | manifesto | 015 |
+  | Código do cientista | hash de cada arquivo do projeto (menos ocultos, caches, saídas e dados) | SHA-256 | manifesto | 015, 019 |
   | Dependências | lock co-resolvido com hashes (`uv`) | hash do lock | manifesto; tag da imagem | 005 |
   | Imagem de treino | tag = hash de todas as entradas do build; imutável | tag + digest | Docker local; ECR em produção | 005 |
   | Dados | hash por arquivo | SHA-256 por arquivo | manifesto; S3 versionado ou Delta em produção | 010, 014 |
@@ -484,10 +506,8 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
 - **Consequências:**
   - a partir da versão servida chega-se ao run, e do run a código, dados, ambiente e
     parâmetros;
-  - o nome do modelo registrado por projeto (hoje `MLSHIP_MODEL_NAME`, com padrão
-    `mlship-model`) é definido no E3;
-  - implementação: E3 (registro, aliases) e E4 (serving por versão). Hoje existem só o
-    tipo `ModelVersion` e a interface `ModelRegistry`.
+  - o nome do modelo registrado é o da pasta do projeto, ou `--model-name` (ADR-019);
+  - implementação: E3 (registro, aliases; ADR-019) e E4 (serving por versão).
 
 ### ADR-016 — Observabilidade do serving e referência para drift
 
@@ -620,10 +640,110 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
   - sem rede, os dados precisam estar no disco antes do treino (ADR-010);
   - `/tmp` não usa `noexec`, porque algumas bibliotecas executam arquivos temporários;
   - o timeout é verificado a cada 0,5 s;
-  - **obrigatório no E3:** ao registrar o `model/` no MLflow, o host percorre o
+  - **feito no E3 (ADR-019):** ao registrar o `model/` no MLflow, o host percorre o
     diretório sem seguir links e recusa qualquer coisa que não seja arquivo ou
-    diretório comum. Senão, um link criado pelo código do cientista poderia levar um
-    arquivo do host para o artifact store.
+    diretório comum, além de limitar tamanho e número de arquivos. Senão, um link
+    criado pelo código do cientista poderia levar um arquivo do host para o artifact
+    store.
+
+### ADR-019 — Lineage, registro e promoção
+
+- **Contexto:** o ADR-015 define o que versionar; falta decidir como cada `train` vira
+  um registro rastreável, inclusive quando falha, e como uma versão chega a um alias.
+- **Decisão:**
+  - **um ID de ponta a ponta:** o run do MLflow é aberto antes de qualquer etapa cara
+    (lock, build, treino), com status `RUNNING`. O ID dele nomeia
+    `.mlship/runs/<run_id>/`. O run termina como `FINISHED`, `FAILED` (com o erro numa
+    tag) ou `KILLED` (Ctrl+C). Projetos inválidos na validação estática não abrem run;
+  - **fail-fast:** antes do run, uma chamada ao MLflow sem retentativas e com timeout
+    de 5 s. Servidor fora do ar é avisado antes de qualquer build ou treino;
+  - **um experimento por modelo:** o nome do modelo é o da pasta do projeto
+    (normalizado), ou `--model-name` (`MLSHIP_MODEL_NAME`). Experimento e modelo
+    registrado têm o mesmo nome;
+  - **manifesto (`manifest.json`, `schema_version` 1), calculado no host:**
+    - ferramenta: versão, commit e `git_dirty` (mudanças não commitadas nos pacotes da
+      ferramenta);
+    - código: SHA-256 de **cada arquivo do projeto**, porque um `config.yaml` lido pelo
+      `train.py` muda o modelo tanto quanto o código. Ficam de fora arquivos e pastas
+      ocultos (`.env`, `.git`: nem o nome é gravado), `.mlship/`, caches, virtualenvs,
+      a pasta de dados quando está dentro do projeto e o `mlship.lock` (registrado em
+      dependências). Arquivos acima de 1 MB são listados com o tamanho, sem hash;
+    - dependências: hash do lock e das entradas do lock;
+    - ambiente: tag e ID da imagem, chave do ambiente e as entradas que a compõem;
+    - dados: local (relativo ao projeto quando está dentro dele, para não gravar o
+      caminho do usuário) e SHA-256 de cada arquivo;
+    - params, seed, limites de recursos e métricas;
+    - modelo: SHA-256 de cada arquivo e um hash único do conjunto (hash do mapa
+      ordenado `{caminho: sha256}`);
+    - erros e avisos da validação e do treino;
+  - **saída não confiável:** o diretório do modelo é percorrido **sem seguir links**.
+    Link simbólico, FIFO ou dispositivo faz o run falhar (`MODEL_UNTRUSTED_FILES`) e
+    nada é enviado (pendência do ADR-018). Tamanho e número de arquivos são conferidos
+    pelos metadados antes de ler um byte (padrão 2 GB e 10.000 arquivos,
+    `MLSHIP_MODEL_MAX_BYTES` e `MLSHIP_MODEL_MAX_FILES`; acima disso, `MODEL_TOO_LARGE`);
+  - **o que o MLflow recusaria é recusado antes:** o MLflow só valida nomes e tamanhos
+    ao registrar, no fim do run, e a regra muda com o sistema do cliente (`:` vale no
+    Linux e não no Windows). A ferramenta aplica a regra mais restrita no início:
+    - params: nome válido, valor até 6.000 caracteres, até 50 params, e nenhum nome com
+      cara de segredo (`password`, `token`, `api_key`…): params ficam gravados para
+      sempre, e o container sem rede não usaria credencial nenhuma;
+    - métricas: nome válido e até 100, checados no runner (erro do projeto, com dica)
+      e de novo no host;
+    - a regra existe no runner e na CLI, que não podem importar um ao outro; um teste
+      de contrato garante que as duas dizem a mesma coisa;
+  - **registro:** params, métricas e tags com os hashes principais (para busca na UI);
+    artefatos `model/`, `manifest.json`, `run.json` e `result.json`. Run com sucesso
+    cria uma nova versão do modelo, com o hash do modelo numa tag da versão; o run
+    recebe o número da versão;
+  - **promoção:** `mlship promote <versão> --alias champion` só move o ponteiro e grava
+    na versão quem promoveu (usuário do sistema), quando e qual versão foi substituída.
+    `latest` é reservado e recusado; promover a versão que já tem o alias não muda nada;
+  - **`mlship runs`:** os runs do modelo, do mais novo ao mais antigo, com status,
+    versão e métricas;
+  - **o run nunca fica `RUNNING` por engano:** qualquer exceção, inclusive Ctrl+C
+    durante o upload, fecha o run como `FAILED` ou `KILLED`. Se o registro falha depois
+    do treino, modelo e manifesto ficam no disco e a mensagem diz onde;
+  - **credenciais e privacidade:** usuário e senha numa URI (ex.:
+    `MLSHIP_TRACKING_URI=https://user:senha@host`) são mascarados em toda mensagem de
+    erro. A telemetria de uso que o MLflow 3 envia por padrão fica desligada na CLI, na
+    imagem e no servidor do compose (`MLFLOW_DISABLE_TELEMETRY`); quem quiser liga.
+- **Alternativas descartadas:**
+  - abrir o run só depois do sucesso: dois IDs (o local e o do MLflow) e falhas
+    invisíveis no tracking;
+  - um experimento global: mistura projetos; filtrar por tag é frágil;
+  - commit da ferramenta gravado no build do pacote: correto para distribuição, mas
+    exige um passo de build que o projeto ainda não tem; vai para o desenho de
+    produção;
+  - hash do modelo calculado pelo runner: viria de dentro da fronteira não confiável
+    (ADR-006);
+  - stages do MLflow (Staging/Production): obsoletos, ver ADR-015.
+- **Consequências:**
+  - da versão servida chega-se ao run, e do run ao manifesto: código, dados,
+    dependências, ambiente, parâmetros e ferramenta;
+  - um run feito com a ferramenta modificada e não commitada fica marcado
+    (`git_dirty=true`): é rastreável, mas não reproduzível a partir do commit;
+  - hashear os dados lê todos os arquivos mais uma vez a cada `train`; aceitável aqui,
+    em produção o manifesto referencia a versão no S3/Delta (ADR-014);
+  - a promoção ainda não compara métricas; o gate do ADR-013 fica para depois do E4;
+  - **limites conhecidos, registrados:**
+    - a integridade do modelo se ancora no hash guardado numa tag da versão; quem tem
+      escrita no registry pode trocar artefato e tag juntos. Em produção: bucket com
+      S3 Object Lock, IAM restrito ao pipeline e assinatura dos artefatos ("Fora de
+      escopo");
+    - "quem promoveu" é o usuário do sistema operacional, declarado pelo próprio
+      ambiente (`getpass`); a auditoria confiável vem do principal do IAM em produção;
+    - pastas de projetos diferentes com o mesmo nome caem no mesmo modelo registrado;
+      `--model-name` resolve;
+    - a cota de disco durante o treino não existe localmente (bind mount sem limite); o
+      limite do modelo protege o host depois do treino. Em produção, cada job tem seu
+      próprio volume com tamanho fixo;
+  - **verificado (E3):** serviço de treino de ponta a ponta contra um servidor MLflow
+    3.17.2 real (run, artefatos, versão com hash, tag da versão no run); `runs` e
+    `promote` pela CLI, incluindo versão inexistente, alias reservado e servidor fora
+    do ar; nomes de métrica testados contra o validador do próprio MLflow
+    (`"rmse (test)"` e `"f1@0.5"` recusados); senha na URI não aparece na saída; sem
+    tentativas de conexão de telemetria depois do opt-out. O treino real em container
+    com registro roda no job de integração do CI.
 
 ---
 
@@ -652,6 +772,11 @@ Itens fora do escopo do código; todos aparecem no desenho de arquitetura:
 - Atualização automática do digest da imagem base (Renovate ou job agendado que abre
   PR), com o Trivy validando a nova imagem (ADR-005).
 - Resolver o lock para a versão exata do Python da imagem base (ADR-005).
+- Commit da ferramenta gravado no build do pacote, em vez de lido do git na execução
+  (ADR-019).
+- Imagem do servidor MLflow fixada por digest (ADR-008).
+- Comando para registrar de novo um run cujo upload falhou (`mlship register <run>`),
+  a partir do que ficou no disco (ADR-019).
 - Avaliação feita pela ferramenta: champion e candidato avaliados no mesmo holdout fixo,
   para que o gate de promoção não dependa de métricas calculadas pelo código do
   cientista (ADR-013).

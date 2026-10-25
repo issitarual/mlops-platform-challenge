@@ -18,6 +18,12 @@ uv run mlship --help
 uv run pytest tests/unit
 ```
 
+## Subir o MLflow
+
+```bash
+docker compose up -d      # tracking e registry em http://127.0.0.1:5000
+```
+
 ## Treinar o exemplo
 
 Requer Docker em execução e alguns GB livres em disco (no Windows, no disco onde o
@@ -32,8 +38,23 @@ Na primeira vez, a ferramenta resolve as dependências (`mlship.lock`) e constr�
 imagem do ambiente, que é verificada arquivo por arquivo antes do uso; nas seguintes,
 reaproveita as duas. O treino roda num container sem
 rede, read-only e com limites, e o resultado fica em
-`examples/california-housing/.mlship/runs/<run_id>/`. Parâmetros vão com `-p`, por
+`examples/california-housing/.mlship/runs/<run_id>/`, com o `manifest.json` (hashes
+de código, dados, dependências, ambiente e modelo). Parâmetros vão com `-p`, por
 exemplo `-p seed=7 -p learning_rate=0.05`.
+
+Cada treino com sucesso vira uma nova versão do modelo `california-housing` (nome da
+pasta; `--model-name` muda). O MLflow não precisa estar aberto no navegador, mas
+precisa estar no ar: a ferramenta avisa antes de construir ou treinar qualquer coisa.
+
+## Acompanhar e promover
+
+```bash
+uv run mlship runs examples/california-housing                # runs, versões e métricas
+uv run mlship promote 1 --project examples/california-housing # alias champion -> v1
+```
+
+O serving sempre segue um alias explícito (`champion`, `challenger`), nunca "a
+última versão".
 
 ## Estrutura
 
