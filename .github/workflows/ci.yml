@@ -49,7 +49,9 @@ jobs:
         run: .venv-lowest/bin/python -m pytest tests/unit/runtime tests/unit/sdk
 
   integration:
-    # Real uv resolution (PyPI) and a real Docker build of the environment image.
+    # Real uv resolution (PyPI), real Docker builds, the CLI end to end, then a scan
+    # of what was built. Build cache is left out on purpose: the cold build is part
+    # of what is tested (ADR-022).
     needs: lint-and-unit
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -62,10 +64,51 @@ jobs:
         run: uv sync --all-packages --locked
       - name: Start MLflow
         run: docker compose up -d --wait
-      - name: Integration tests
+      - name: Integration and end-to-end tests
         env:
           MLSHIP_TRACKING_URI: http://127.0.0.1:5000
-        run: uv run pytest -m integration tests/integration -v
+        run: uv run pytest -m "integration or e2e" tests/integration tests/e2e -v
       - name: MLflow logs on failure
         if: failure()
         run: docker compose logs mlflow
+      - name: Install Trivy (pinned version, verified checksum)
+        env:
+          VERSION: 0.75.0
+          SHA256: c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
+        run: |
+          curl -sSfL -o trivy.tar.gz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${VERSION}/trivy_${VERSION}_Linux-64bit.tar.gz"
+          echo "${SHA256}  trivy.tar.gz" | sha256sum --check
+          tar -xzf trivy.tar.gz trivy
+      # Blocks only what can be fixed now: base images always carry CVEs without a patch.
+      - name: Vulnerabilities in the locked dependencies
+        run: |
+          ./trivy fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+            --skip-dirs .venv --skip-files trivy .
+      - name: Vulnerabilities in the environment images the tests built
+        run: |
+          images=$(docker images --filter "reference=mlship-env:*" --format '{{.Repository}}:{{.Tag}}')
+          test -n "$images"
+          for image in $images; do
+            ./trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$image"
+          done
+
+  secrets:
+    # The whole history: a secret removed in a later commit is still public.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks (pinned version, verified checksum)
+        env:
+          VERSION: 8.30.1
+          SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          curl -sSfL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
+          echo "${SHA256}  gitleaks.tar.gz" | sha256sum --check
+          tar -xzf gitleaks.tar.gz gitleaks
+      - name: Scan the git history
+        run: ./gitleaks git --redact --verbose .
