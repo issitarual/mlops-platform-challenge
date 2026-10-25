@@ -11,11 +11,16 @@ import threading
 import urllib.error
 import urllib.request
 import uuid
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import docker
+import mlflow.pyfunc
+import numpy as np
+import pandas as pd
 import pytest
+from tracking_cleanup import remove_models
 
 from mlship.bootstrap import build_services
 from mlship.config import Settings
@@ -105,8 +110,21 @@ def _train(project: Path, data: Path, **overrides: object) -> TrainingOutcome:
     return services.training.train(project, data, {}, model_name=_model_name())
 
 
+_CREATED_MODELS: list[str] = []
+
+
 def _model_name() -> str:
-    return f"it-{os.getpid()}-{uuid.uuid4().hex[:6]}"
+    name = f"it-{os.getpid()}-{uuid.uuid4().hex[:6]}"
+    _CREATED_MODELS.append(name)
+    return name
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _remove_test_models() -> Iterator[None]:
+    """Keep a shared MLflow server (CI, or the one used for the demo) free of test runs."""
+    yield
+    if "MLSHIP_TRACKING_URI" in os.environ:
+        remove_models(os.environ["MLSHIP_TRACKING_URI"], _CREATED_MODELS)
 
 
 def test_example_trains_registers_and_promotes(tmp_path: Path) -> None:
@@ -127,6 +145,36 @@ def test_example_trains_registers_and_promotes(tmp_path: Path) -> None:
     assert promotion.current.version == version.version
     (record,) = services.registry.list_runs(name, limit=5)
     assert record.run_id == outcome.run_id and record.model_version == version.version
+
+
+def test_the_same_inputs_reproduce_the_same_model_behaviour(tmp_path: Path) -> None:
+    """ADR-011: same inputs -> same hashes, metrics and predictions on a fixed input.
+
+    Not compared on purpose: the whole manifest (run id, timestamps) and the bytes of
+    the saved model (serialization is not byte-for-byte deterministic).
+    """
+    project, data = _project(tmp_path, (EXAMPLE / "train.py").read_text())
+    services = build_services(_settings(tmp_path))
+    name = _model_name()
+    runs = [
+        services.training.train(project, data, {"seed": "7"}, model_name=name) for _ in range(2)
+    ]
+    assert all(run.succeeded for run in runs), [run.issues for run in runs]
+
+    first, second = (json.loads((r.run_dir / "manifest.json").read_text()) for r in runs)
+    assert first["code"]["sha256"] == second["code"]["sha256"]
+    assert first["data"]["sha256"] == second["data"]["sha256"]
+    assert first["dependencies"]["lock_sha256"] == second["dependencies"]["lock_sha256"]
+    assert first["environment"]["environment_key"] == second["environment"]["environment_key"]
+    assert first["seed"] == second["seed"] == 7
+    assert runs[0].metrics == runs[1].metrics
+
+    fixed = pd.read_csv(data / "california_housing.csv").drop(columns=["MedHouseVal"]).head(20)
+    predictions = [
+        mlflow.pyfunc.load_model(str(run.run_dir / "output" / "model")).predict(fixed)
+        for run in runs
+    ]
+    assert np.array_equal(np.asarray(predictions[0]), np.asarray(predictions[1]))
 
 
 def test_the_container_is_isolated(tmp_path: Path) -> None:
