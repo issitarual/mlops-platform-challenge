@@ -1,7 +1,11 @@
 """``mlship serve``: run the REST API for the model behind an alias."""
 
 import os
+import signal
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from types import FrameType
 from typing import Annotated
 
 import typer
@@ -21,6 +25,24 @@ _FORWARDED = (
 )
 
 
+@contextmanager
+def _stop_like_ctrl_c() -> Iterator[None]:
+    """SIGTERM (``docker stop``, CI runners, systemd) and Windows Ctrl+Break stop the API
+    the way Ctrl+C does, so the container is always removed on the way out."""
+
+    def interrupt(signum: int, frame: FrameType | None) -> None:
+        raise KeyboardInterrupt
+
+    names = ("SIGTERM", "SIGBREAK")
+    signals = [getattr(signal, n) for n in names if hasattr(signal, n)]
+    previous = {s: signal.signal(s, interrupt) for s in signals}
+    try:
+        yield
+    finally:
+        for s, handler in previous.items():
+            signal.signal(s, handler)
+
+
 def command(
     alias: Annotated[str, typer.Option(help="Model alias to serve.")] = "champion",
     port: Annotated[int, typer.Option(min=1, max=65535, help="Local port (127.0.0.1).")] = 8080,
@@ -36,22 +58,23 @@ def command(
 ) -> None:
     """Resolve the alias, verify the model hash, build the image and start the API."""
     services = load_services()
-    try:
-        name = resolve_model_name(project, model_name)
-        presenters.serving_started(name, alias)
-        prepared = services.serving.prepare(project.resolve(), name, alias)
-        presenters.serving_prepared(prepared)
-        services.serving.run(
-            prepared,
-            port=port,
-            workers=workers,
-            environment={key: os.environ[key] for key in _FORWARDED if key in os.environ},
-            on_log=presenters.serving_log,
-            on_ready=presenters.serving_ready,
-        )
-    except MlshipError as exc:
-        presenters.error(exc)
-        raise typer.Exit(code=1) from exc
-    except KeyboardInterrupt as exc:
-        presenters.serving_stopped()
-        raise typer.Exit(code=0) from exc
+    with _stop_like_ctrl_c():
+        try:
+            name = resolve_model_name(project, model_name)
+            presenters.serving_started(name, alias)
+            prepared = services.serving.prepare(project.resolve(), name, alias)
+            presenters.serving_prepared(prepared)
+            services.serving.run(
+                prepared,
+                port=port,
+                workers=workers,
+                environment={key: os.environ[key] for key in _FORWARDED if key in os.environ},
+                on_log=presenters.serving_log,
+                on_ready=presenters.serving_ready,
+            )
+        except MlshipError as exc:
+            presenters.error(exc)
+            raise typer.Exit(code=1) from exc
+        except KeyboardInterrupt as exc:
+            presenters.serving_stopped()
+            raise typer.Exit(code=0) from exc

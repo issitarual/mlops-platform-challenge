@@ -1,5 +1,9 @@
 """``mlship serve`` through Typer, with the host-side service on in-memory fakes."""
 
+import os
+import signal
+import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +12,8 @@ from test_serving_service import World
 from typer.testing import CliRunner
 
 from mlship.controllers.app import app
+from mlship.domain.serving import PreparedServing
+from mlship.services.serving_service import ServingService
 
 runner = CliRunner()
 
@@ -43,3 +49,30 @@ def test_serving_an_alias_nobody_has_fails_with_a_hint(world: World) -> None:
         ["serve", "--alias", "challenger", "--project", str(world.project), "--model-name", "demo"],
     )
     assert result.exit_code == 1 and "mlship promote" in result.output
+
+
+class _TerminatedWhileServing:
+    """Prepares like the real service, then receives SIGTERM while the API runs."""
+
+    def __init__(self, inner: ServingService) -> None:
+        self._inner = inner
+
+    def prepare(self, project_dir: Path, model_name: str, alias: str) -> PreparedServing:
+        return self._inner.prepare(project_dir, model_name, alias)
+
+    def run(self, *args: object, **kwargs: object) -> None:
+        os.kill(os.getpid(), signal.SIGTERM)
+        time.sleep(5)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="os.kill(SIGTERM) ends the process on Windows")
+def test_sigterm_stops_like_ctrl_c_and_restores_the_handler(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    before = signal.getsignal(signal.SIGTERM)
+    services = SimpleNamespace(serving=_TerminatedWhileServing(world.serving()))
+    monkeypatch.setattr("mlship.controllers.serve.load_services", lambda: services)
+    result = runner.invoke(app, ["serve", "--project", str(world.project), "--model-name", "demo"])
+    assert result.exit_code == 0, result.output
+    assert "Stopped" in result.output
+    assert signal.getsignal(signal.SIGTERM) is before

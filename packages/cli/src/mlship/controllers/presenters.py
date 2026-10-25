@@ -256,4 +256,4 @@ def serving_ready(url: str) -> None:
 
 
 def serving_stopped() -> None:
-    err_console.print("\n[yellow]Stopped[/yellow]; the API container was removed.")
+    err_console.print("\n[yellow]Stopped[/yellow]; nothing was left running.")
