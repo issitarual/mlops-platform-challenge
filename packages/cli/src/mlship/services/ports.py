@@ -6,6 +6,7 @@ from typing import Protocol
 
 from mlship.domain.environment import ImageRef
 from mlship.domain.runs import ModelVersion, RunRecord, RunStatus, ToolInfo
+from mlship.domain.serving import ServingImageSpec, ServingJobSpec
 from mlship.domain.training import TrainingJobResult, TrainingJobSpec
 
 
@@ -50,11 +51,18 @@ class ContainerRuntime(Protocol):
         """Run the job with the isolation of ADR-018; stream logs to ``on_log``."""
         ...
 
-    def ensure_serving_image(
-        self, base: ImageRef, model: ModelVersion, model_dir: Path
-    ) -> ImageRef: ...
+    def ensure_serving_image(self, spec: ServingImageSpec, model_dir: Path) -> ImageRef:
+        """``FROM`` the environment image + the verified model; reused when it exists."""
+        ...
 
-    def run_serving(self, image: ImageRef, port: int, workers: int) -> None: ...
+    def run_serving(
+        self,
+        spec: ServingJobSpec,
+        on_log: Callable[[str], None],
+        on_ready: Callable[[str], None],
+    ) -> None:
+        """Run in the foreground until Ctrl+C; an exit on its own is an error."""
+        ...
 
 
 class ContentHasher(Protocol):
@@ -103,6 +111,14 @@ class RunRepository(Protocol):
 
     def list_recent(self, experiment: str, limit: int) -> Sequence[RunRecord]: ...
 
+    def get_tags(self, run_id: str) -> Mapping[str, str]:
+        """Tags live in the tracking database, apart from the artifact store."""
+        ...
+
+    def download_artifact(self, run_id: str, path: str, target_dir: Path) -> Path | None:
+        """Download one artifact of a run; ``None`` when the run does not have it."""
+        ...
+
 
 class ModelRegistry(Protocol):
     def register(self, name: str, run_id: str, model_sha256: str) -> ModelVersion:
@@ -117,4 +133,6 @@ class ModelRegistry(Protocol):
         """Point ``alias`` at ``version`` and record ``tags`` on that version."""
         ...
 
-    def download(self, model: ModelVersion, target_dir: Path) -> Path: ...
+    def download(self, model: ModelVersion, target_dir: Path) -> Path:
+        """Download the model files of a version into ``target_dir``; return their folder."""
+        ...

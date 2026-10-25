@@ -11,7 +11,12 @@ from mlship.domain.environment import (
     PreparedEnvironment,
     ResolvedLock,
 )
-from mlship.domain.errors import EnvironmentBuildError, MlshipError
+from mlship.domain.errors import (
+    EnvironmentBuildError,
+    EnvironmentMismatchError,
+    MlshipError,
+    ModelIntegrityError,
+)
 from mlship.services.ports import (
     ContainerRuntime,
     DockerfileProvider,
@@ -135,14 +140,56 @@ class EnvironmentService:
 
     def prepare(self, project_dir: Path) -> PreparedEnvironment:
         """Lock dependencies, then reuse the image for these inputs or build it."""
-        lock = self.lock(project_dir)
-        dockerfile = self._dockerfile.render()
-        inputs = EnvironmentInputs(
+        return self._image_for(self.lock(project_dir))
+
+    def ensure_image_for_lock(
+        self, lock_file: Path, expected_lock_sha256: str, expected_key: str
+    ) -> PreparedEnvironment:
+        """The environment of an earlier run, reused or rebuilt from its own lock (ADR-020).
+
+        Both expected values come from the run's tags in the tracking database, not
+        from the artifact store the lock was downloaded from. The lock must hash to
+        what training recorded, and the recomputed key must equal the recorded key:
+        a different key means the tool (runtime code, Dockerfile, base image) changed
+        since, and serving would no longer use the environment the model was trained in.
+        """
+        content = lock_file.read_text(encoding="utf-8")
+        lock_sha256 = _sha256_text(content)
+        if lock_sha256 != expected_lock_sha256:
+            raise ModelIntegrityError(
+                "The lock file of this model's run does not match the hash recorded at "
+                "training; its environment was not built.",
+                hint="The artifact store was changed after training. Train the model "
+                "again, and check who has write access to the artifact store.",
+                details=f"recorded {expected_lock_sha256[:12]}…, downloaded {lock_sha256[:12]}…",
+            )
+        first = content.partition("\n")[0]
+        lock = ResolvedLock(
+            lock_file, lock_sha256, first.removeprefix(LOCK_INPUTS_PREFIX), reused=True
+        )
+        inputs = self._inputs(lock)
+        if inputs.key() != expected_key:
+            raise EnvironmentMismatchError(
+                "The training environment of this model cannot be rebuilt identically.",
+                hint="mlship changed since this model was trained (runtime, Dockerfile or "
+                "base image). Train it again with this version of mlship, or serve it with "
+                "the version that trained it.",
+                details=f"expected environment key {expected_key[:16]}…, "
+                f"rebuilt {inputs.key()[:16]}…",
+            )
+        return self._image_for(lock)
+
+    def _inputs(self, lock: ResolvedLock) -> EnvironmentInputs:
+        return EnvironmentInputs(
             lock_sha256=lock.sha256,
             runtime_source_sha256=self._runtime.source_sha256(),
-            dockerfile_sha256=_sha256_text(dockerfile),
+            dockerfile_sha256=_sha256_text(self._dockerfile.render()),
             platform=self._docker_platform,
         )
+
+    def _image_for(self, lock: ResolvedLock) -> PreparedEnvironment:
+        dockerfile = self._dockerfile.render()
+        inputs = self._inputs(lock)
         key = inputs.key()
         tag = f"{self._image_repository}:{key[:16]}"
 

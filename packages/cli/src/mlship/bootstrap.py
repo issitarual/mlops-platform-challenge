@@ -13,13 +13,14 @@ from mlship.adapters.runtime_packager import WorkspaceRuntimePackager
 from mlship.adapters.tool_info import GitToolInfo
 from mlship.adapters.uv_lock_resolver import UvLockResolver
 from mlship.config import Settings
+from mlship.domain.serving import ServingLimits
 from mlship.domain.training import ResourceLimits
 from mlship.repositories.mlflow_model_registry import MlflowModelRegistry
 from mlship.repositories.mlflow_run_repository import MlflowRunRepository
 from mlship.services.environment_service import EnvironmentService
 from mlship.services.registry_service import RegistryService
 from mlship.services.run_recorder import RunRecorder
-from mlship.services.serving_service import ServingService
+from mlship.services.serving_service import ServingPolicy, ServingService
 from mlship.services.training_service import TrainingPolicy, TrainingService
 from mlship.services.validation.validator import ProjectValidator
 
@@ -74,7 +75,23 @@ def build_services(settings: Settings) -> Services:
             ),
         ),
         registry=RegistryService(run_repository, model_registry, actor=_current_user),
-        serving=ServingService(model_registry, container_runtime),
+        serving=ServingService(
+            run_repository,
+            model_registry,
+            environment,
+            container_runtime,
+            Sha256Hasher(),
+            ServingPolicy(
+                skops_trusted_types=tuple(settings.skops_trusted_types),
+                limits=ServingLimits(
+                    cpus=settings.serve_cpu_limit,
+                    memory=settings.serve_memory_limit,
+                    pids=settings.serve_pids_limit,
+                ),
+                model_max_bytes=settings.model_max_bytes,
+                model_max_files=settings.model_max_files,
+            ),
+        ),
     )
 
 

@@ -122,4 +122,12 @@ class MlflowModelRegistry:
             raise TrackingError(f"Moving the alias {alias} failed.", details=str(exc)) from exc
 
     def download(self, model: ModelVersion, target_dir: Path) -> Path:
-        raise NotImplementedError("E4")
+        """The files of the version's run; the caller verifies them before any use."""
+        target_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            local = self._mlflow().download_artifacts(model.run_id, MODEL_ARTIFACT, str(target_dir))
+        except MlflowException as exc:
+            raise TrackingError(
+                f"Downloading {model.name} version {model.version} failed.", details=str(exc)
+            ) from exc
+        return Path(local)

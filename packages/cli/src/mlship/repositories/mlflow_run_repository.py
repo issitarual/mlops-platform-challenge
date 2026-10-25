@@ -140,3 +140,22 @@ class MlflowRunRepository:
             )
             for run in runs
         ]
+
+    def get_tags(self, run_id: str) -> Mapping[str, str]:
+        try:
+            return dict(self._mlflow().get_run(run_id).data.tags)
+        except MlflowException as exc:
+            raise TrackingError(f"Reading run {run_id} failed.", details=str(exc)) from exc
+
+    def download_artifact(self, run_id: str, path: str, target_dir: Path) -> Path | None:
+        client = self._mlflow()
+        try:
+            names = {artifact.path for artifact in client.list_artifacts(run_id)}
+            if path not in names:
+                return None
+            target_dir.mkdir(parents=True, exist_ok=True)
+            return Path(client.download_artifacts(run_id, path, str(target_dir)))
+        except MlflowException as exc:
+            raise TrackingError(
+                f"Downloading {path} of run {run_id} failed.", details=str(exc)
+            ) from exc

@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     allow_pickle_enabled: bool = True
     model_max_bytes: int = Field(default=2 * 1024**3, gt=0)
     model_max_files: int = Field(default=10_000, gt=0)
+    serve_cpu_limit: float = Field(default=2.0, gt=0)
+    serve_memory_limit: str = "2g"
+    serve_pids_limit: int = Field(default=256, gt=0)
 
     @model_validator(mode="after")
     def _target_is_consistent(self) -> Self:

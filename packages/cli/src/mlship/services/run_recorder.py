@@ -11,6 +11,7 @@ from mlship.services.lineage import manifest_tags
 from mlship.services.ports import ModelRegistry, RunRepository
 
 ERROR_TAG = "mlship.error"
+LOCK_ARTIFACT = "mlship.lock"
 
 
 class RunRecorder:
@@ -22,7 +23,7 @@ class RunRecorder:
     ) -> None:
         self._runs = run_repository
         self._registry = model_registry
-        self._actor = actor  # who trains: OS user locally, IAM principal in production
+        self._actor = actor
 
     def check_available(self) -> None:
         self._runs.check_available()
@@ -31,7 +32,7 @@ class RunRecorder:
         return self._runs.start(
             model_name,
             tags={
-                "mlflow.user": self._actor(),  # standard tag: "User" column in the MLflow UI
+                "mlflow.user": self._actor(),
                 "mlship.model_name": model_name,
                 "mlship.tool_version": tool.version,
                 "mlship.tool_git_sha": tool.git_sha,
@@ -44,6 +45,7 @@ class RunRecorder:
         artifacts = {
             "manifest.json": run_dir / "manifest.json",
             "run.json": run_dir / "run.json",
+            LOCK_ARTIFACT: outcome.environment.lock.path,
         }
         result_file = run_dir / "output" / "result.json"
         if result_file.is_file() and not result_file.is_symlink():

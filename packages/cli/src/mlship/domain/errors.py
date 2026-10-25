@@ -49,6 +49,14 @@ class ArtifactTooLargeError(UntrustedArtifactError):
     """Training output is larger, or has more files, than the platform allows."""
 
 
+class ModelIntegrityError(MlshipError):
+    """Downloaded model files do not match the hash registered for that version."""
+
+
+class EnvironmentMismatchError(MlshipError):
+    """The environment of a run cannot be rebuilt identically (ADR-020, D1)."""
+
+
 class ProjectInvalidError(MlshipError):
     """The project breaks the contract; ``report`` lists every issue at once."""
 

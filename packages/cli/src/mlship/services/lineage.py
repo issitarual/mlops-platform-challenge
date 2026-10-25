@@ -89,6 +89,7 @@ def manifest_tags(manifest: Manifest) -> dict[str, str]:
         "code_sha256": manifest.code_sha256,
         "data_sha256": manifest.data_sha256,
         "lock_sha256": manifest.lock_sha256,
+        "environment_key": str(manifest.environment.get("environment_key", "")),
         "image_tag": str(manifest.environment.get("image_tag", "")),
         "tool_version": manifest.tool.version,
         "tool_git_sha": manifest.tool.git_sha,
