@@ -43,3 +43,12 @@ jobs:
         run: uv sync --all-packages --locked
       - name: Integration tests
         run: uv run pytest -m integration tests/integration -v
+      - name: Start MLflow
+        run: docker compose up -d --wait
+      - name: Integration tests
+        env:
+          MLSHIP_TRACKING_URI: http://127.0.0.1:5000
+        run: uv run pytest -m integration tests/integration -v
+      - name: MLflow logs on failure
+        if: failure()
+        run: docker compose logs mlflow
