@@ -4,10 +4,20 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
-from fakes import FakeContainerRuntime, FakeDockerfile, FakeLockResolver, FakeRuntimePackager
+from fakes import (
+    FakeContainerRuntime,
+    FakeDockerfile,
+    FakeLockResolver,
+    FakeModelRegistry,
+    FakeRunRepository,
+    FakeRuntimePackager,
+    FakeToolInfo,
+)
 
+from mlship.adapters.hashing import Sha256Hasher
 from mlship.domain.training import ResourceLimits, TrainingJobResult, TrainingJobSpec
 from mlship.services.environment_service import EnvironmentService
+from mlship.services.run_recorder import RunRecorder
 from mlship.services.training_service import TrainingPolicy, TrainingService
 from mlship.services.validation.validator import ProjectValidator
 
@@ -52,7 +62,13 @@ class RecordingTrainingRuntime(FakeContainerRuntime):
 
 
 def make_service(
-    runtime: RecordingTrainingRuntime, *, allow_pickle_enabled: bool = True
+    runtime: RecordingTrainingRuntime,
+    *,
+    allow_pickle_enabled: bool = True,
+    runs: FakeRunRepository | None = None,
+    registry: FakeModelRegistry | None = None,
+    model_max_bytes: int = 10**6,
+    model_max_files: int = 100,
 ) -> TrainingService:
     environment = EnvironmentService(
         FakeLockResolver(),
@@ -63,5 +79,22 @@ def make_service(
         python_platform="x86_64-manylinux_2_28",
         docker_platform="linux/amd64",
     )
-    policy = TrainingPolicy(LIMITS, ("a.B",), allow_pickle_enabled)
-    return TrainingService(ProjectValidator(), environment, runtime, None, policy)  # type: ignore[arg-type]
+    policy = TrainingPolicy(
+        LIMITS,
+        ("a.B",),
+        allow_pickle_enabled,
+        model_max_bytes=model_max_bytes,
+        model_max_files=model_max_files,
+    )
+    return TrainingService(
+        ProjectValidator(),
+        environment,
+        runtime,
+        RunRecorder(
+            runs if runs is not None else FakeRunRepository(),
+            registry if registry is not None else FakeModelRegistry(),
+        ),
+        Sha256Hasher(),
+        FakeToolInfo(),
+        policy,
+    )

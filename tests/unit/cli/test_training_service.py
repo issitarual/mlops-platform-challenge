@@ -98,9 +98,6 @@ def test_failed_run_returns_the_runner_issues(tmp_path: Path) -> None:
     assert [i.code for i in outcome.issues] == ["TRAIN_RAISED"]
 
 
-# --- E3: tracking, manifest and registration ------------------------------------------
-
-
 def test_success_is_tracked_registered_and_described_by_the_manifest(tmp_path: Path) -> None:
     project, data = make_project(tmp_path)
     runs, registry = FakeRunRepository(), FakeModelRegistry()
