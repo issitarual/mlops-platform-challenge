@@ -1,9 +1,12 @@
 # Local MLflow tracking server + model registry.
-# Production equivalent: managed MLflow on SageMaker (see docs/architecture).
+# Production equivalent: managed MLflow on SageMaker, artifacts in S3 (docs/architecture).
+#
+# The server proxies artifacts (--artifacts-destination): clients upload through it and
+# never need storage credentials. Switching to S3 changes only this file.
 services:
   mlflow:
     # Same version as the mlflow-skinny client in uv.lock (3.17.2).
-    # TODO(E3): confirm the tag is published and pin by digest (image@sha256:...).
+    # TODO(E3): pin by digest once confirmed: docker buildx imagetools inspect <image>
     image: ghcr.io/mlflow/mlflow:v3.17.2
     command: >
       mlflow server
@@ -11,8 +14,23 @@ services:
       --port 5000
       --backend-store-uri sqlite:////mlflow/mlflow.db
       --artifacts-destination /mlflow/artifacts
+    environment:
+      MLFLOW_DISABLE_TELEMETRY: "true"  # MLflow 3 sends usage telemetry by default
     ports:
       - "127.0.0.1:5000:5000"  # bound to localhost only
     volumes:
-      - ./.mlflow:/mlflow
+      - mlflow-data:/mlflow  # named volume: no host permission or path issues
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=3)"
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
     restart: unless-stopped
+
+volumes:
+  mlflow-data:
