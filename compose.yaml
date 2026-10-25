@@ -5,9 +5,9 @@
 # never need storage credentials. Switching to S3 changes only this file.
 services:
   mlflow:
-    # Same version as the mlflow-skinny client in uv.lock (3.17.2).
-    # TODO(E3): pin by digest once confirmed: docker buildx imagetools inspect <image>
-    image: ghcr.io/mlflow/mlflow:v3.17.2
+    # Same version as the mlflow-skinny client in uv.lock (3.17.2), pinned by the digest
+    # of the multi-arch index (docker buildx imagetools inspect, 24/10).
+    image: ghcr.io/mlflow/mlflow:v3.17.2@sha256:2cc40b3208991940d824d04f339833a0b69507569012aa5ec545690608602fc0
     command: >
       mlflow server
       --host 0.0.0.0

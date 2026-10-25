@@ -309,9 +309,9 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
     dependências de desenvolvimento, para os testes com SQLite;
   - **verificado (E3):** os testes dos repositórios passam com SQLite e contra um
     `mlflow server` 3.17.2 real por HTTP, com artefatos indo para o destino do servidor;
-  - a imagem `ghcr.io/mlflow/mlflow:v3.17.2` acompanha a versão do cliente no lock;
-    ainda falta fixá-la por digest (o ambiente de desenvolvimento da IA não alcança o
-    registry).
+  - a imagem `ghcr.io/mlflow/mlflow:v3.17.2` acompanha a versão do cliente no lock e é
+    fixada pelo digest do índice multiarquitetura (`sha256:2cc40b32…2fc0`, consultado
+    em 24/10); **verificado:** sobe no Docker Desktop e o healthcheck fica `Healthy`.
 
 ### ADR-009 — Docker SDK para Python
 
@@ -774,7 +774,6 @@ Itens fora do escopo do código; todos aparecem no desenho de arquitetura:
 - Resolver o lock para a versão exata do Python da imagem base (ADR-005).
 - Commit da ferramenta gravado no build do pacote, em vez de lido do git na execução
   (ADR-019).
-- Imagem do servidor MLflow fixada por digest (ADR-008).
 - Comando para registrar de novo um run cujo upload falhou (`mlship register <run>`),
   a partir do que ficou no disco (ADR-019).
 - Avaliação feita pela ferramenta: champion e candidato avaliados no mesmo holdout fixo,
