@@ -93,7 +93,7 @@ def make_service(
         model_max_files=model_max_files,
     )
     return TrainingService(
-        ProjectValidator(),
+        ProjectValidator(FakeRuntimePackager().requirements()),
         environment,
         runtime,
         RunRecorder(

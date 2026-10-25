@@ -959,6 +959,7 @@ source = { editable = "packages/cli" }
 dependencies = [
     { name = "docker" },
     { name = "mlflow-skinny" },
+    { name = "packaging" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "typer" },
@@ -968,6 +969,7 @@ dependencies = [
 requires-dist = [
     { name = "docker", specifier = ">=7.2.0" },
     { name = "mlflow-skinny", specifier = ">=3.17.2" },
+    { name = "packaging", specifier = ">=24.2" },
     { name = "pydantic", specifier = ">=2.14.1" },
     { name = "pydantic-settings", specifier = ">=2.16.1" },
     { name = "typer", specifier = ">=0.27.3" },
@@ -995,8 +997,8 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.159.1" },
     { name = "mlflow-skinny", specifier = ">=3.17.2" },
     { name = "mlship-sdk", editable = "packages/sdk" },
-    { name = "numpy", specifier = ">=2.5.4" },
-    { name = "pandas", specifier = ">=3.1.0" },
+    { name = "numpy", specifier = ">=1.26.4" },
+    { name = "pandas", specifier = ">=2.2.2" },
     { name = "prometheus-client", specifier = ">=0.26.0" },
     { name = "pydantic", specifier = ">=2.14.1" },
     { name = "pydantic-settings", specifier = ">=2.16.1" },

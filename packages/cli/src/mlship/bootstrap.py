@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from mlship.adapters.docker_runtime import DockerRuntime
 from mlship.adapters.dockerfile import EnvironmentDockerfile
 from mlship.adapters.hashing import Sha256Hasher
+from mlship.adapters.project_template import PackagedProjectTemplate
 from mlship.adapters.runtime_packager import WorkspaceRuntimePackager
 from mlship.adapters.tool_info import GitToolInfo
 from mlship.adapters.uv_lock_resolver import UvLockResolver
@@ -20,28 +21,32 @@ from mlship.repositories.mlflow_run_repository import MlflowRunRepository
 from mlship.services.environment_service import EnvironmentService
 from mlship.services.registry_service import RegistryService
 from mlship.services.run_recorder import RunRecorder
+from mlship.services.scaffold_service import ScaffoldService
 from mlship.services.serving_service import ServingPolicy, ServingService
 from mlship.services.training_service import TrainingPolicy, TrainingService
 from mlship.services.validation.validator import ProjectValidator
+from mlship.services.validation_service import ValidationService
 
 
 @dataclass(frozen=True, slots=True)
 class Services:
-    validator: ProjectValidator
+    validation: ValidationService
     environment: EnvironmentService
     training: TrainingService
     registry: RegistryService
     serving: ServingService
+    scaffold: ScaffoldService
 
 
 def build_services(settings: Settings) -> Services:
     container_runtime = DockerRuntime(settings.platform)
     run_repository = MlflowRunRepository(settings.tracking_uri, settings.artifact_root)
     model_registry = MlflowModelRegistry(settings.tracking_uri)
-    validator = ProjectValidator()
+    runtime_packager = WorkspaceRuntimePackager()
+    validator = ProjectValidator(runtime_packager.requirements())
     environment = EnvironmentService(
         UvLockResolver(settings.python_version, settings.python_platform),
-        WorkspaceRuntimePackager(),
+        runtime_packager,
         EnvironmentDockerfile(settings.base_image),
         container_runtime,
         python_version=settings.python_version,
@@ -51,7 +56,7 @@ def build_services(settings: Settings) -> Services:
         image_repository=settings.image_repository,
     )
     return Services(
-        validator=validator,
+        validation=ValidationService(validator, environment),
         environment=environment,
         training=TrainingService(
             validator,
@@ -75,6 +80,7 @@ def build_services(settings: Settings) -> Services:
             ),
         ),
         registry=RegistryService(run_repository, model_registry, actor=_current_user),
+        scaffold=ScaffoldService(PackagedProjectTemplate()),
         serving=ServingService(
             run_repository,
             model_registry,
