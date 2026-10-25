@@ -28,6 +28,7 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
 | [019](#adr-019--lineage-registro-e-promoção) | Lineage, registro e promoção | Aceita |
 | [020](#adr-020--serving-da-versão-promovida) | Serving da versão promovida | Aceita |
 | [021](#adr-021--validação-do-projeto-lock-e-init) | Validação do projeto, lock e `init` | Aceita |
+| [022](#adr-022--estratégia-de-testes-e-ci) | Estratégia de testes e CI | Aceita |
 
 ---
 
@@ -964,6 +965,91 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
     --offline` → treino do `train.py` gerado, também no Windows; arquivos em UTF-16,
     com BOM e latin-1 declarado; `tests/` e `scripts/` fora do grafo; lock ausente,
     desatualizado e editado; testes do runtime com `numpy` 1.26.4 e `pandas` 2.2.2.
+
+### ADR-022 — Estratégia de testes e CI
+
+- **Contexto:** o enunciado avalia a escolha do que testar, não a cobertura. A
+  promessa da ferramenta é: o código do cientista roda isolado, o resultado é
+  reproduzível e rastreável, e a API serve exatamente o modelo registrado. Os testes
+  existem para provar essas garantias, e o CI, para que elas não regridam.
+- **Decisão:**
+  - **pirâmide em três níveis:**
+    - **unitários** (cerca de 300, segundos, sem rede nem Docker): regras de
+      validação, lock, manifesto, lineage contra um MLflow real em SQLite, API com um
+      modelo real salvo pelo runner, política de carga, adapters com o Docker SDK
+      falsificado, regras de arquitetura entre camadas;
+    - **integração** (Docker e MLflow reais): resolução e build do ambiente, treino no
+      container, isolamento de fato, timeout, serving ponta a ponta e
+      reprodutibilidade;
+    - **ponta a ponta pela CLI** (T1): o comando `mlship` instalado, como o cientista o
+      usa, numa pasta vazia: `init → validate --strict → train → runs → promote →
+      serve → predict → parar`. Usa os dados sintéticos do template, sem download, e
+      verifica os códigos de saída e que o container some ao parar;
+  - **reprodutibilidade (T2):** o mesmo projeto treinado duas vezes tem os mesmos
+    hashes de entrada (código, dados, lock, ambiente), as mesmas métricas e **as mesmas
+    predições sobre uma entrada fixa**. Não se comparam o manifesto inteiro (run id,
+    datas) nem os bytes do modelo: a serialização não é determinística byte a byte, e o
+    que importa é o comportamento (ADR-011);
+  - **segurança no CI:**
+    - **gitleaks (T3)** no histórico inteiro (um segredo apagado depois continua
+      público) e no pre-commit; binário de versão fixa com checksum verificado, sem
+      action de terceiros nem licença;
+    - **Trivy (T4)** nas dependências travadas (`uv.lock`) e nas imagens de ambiente que
+      os testes construíram. Bloqueia CRITICAL e HIGH **com correção disponível**: CVE
+      sem patch na imagem base não tem ação possível e viraria ruído;
+    - **Dependabot (T5)** para `uv` e GitHub Actions, semanal e agrupado;
+  - **sem cache de build no CI (T6):** o job de integração levou 3m44s no último CI. O
+    cache `type=gha` exige construir com `buildx`, e o mlship constrói pelo Docker
+    SDK: seria testar outro caminho de build ou mudar o produto por causa do CI. E o
+    build frio é o que pega falhas reais (imagem base nova, a imagem truncada do
+    ADR-005). Revisitar se o job passar de uns 10 minutos, com cache nos PRs e build
+    frio no `main`;
+  - **parar o `serve` por sinal:** SIGTERM (`docker stop`, runners de CI, systemd) e
+    Ctrl+Break no Windows param como Ctrl+C, removendo o container. Achado ao
+    escrever o ponta a ponta: antes, só o Ctrl+C limpava;
+  - **saída em UTF-8 mesmo redirecionada:** no Windows, pipe e arquivo usam a página de
+    código ANSI (cp1252), que não tem as setas do mlship nem os emojis que o MLflow
+    imprime no fim do run. `mlship train > log.txt`, ou qualquer log de CI no Windows,
+    quebrava com `UnicodeEncodeError`. A CLI passa a escrever UTF-8 nesses casos. Achado
+    pelo ponta a ponta rodado no Windows;
+  - **testes não sujam o MLflow compartilhado:** integração e ponta a ponta apagam no
+    fim os modelos e experimentos que criaram (o servidor do compose é o mesmo da
+    demonstração).
+- **Alternativas descartadas:**
+  - ponta a ponta só pelos serviços (como era): não prova que os comandos funcionam
+    juntos nem testa a saída que o cientista vê;
+  - script shell no CI para o ponta a ponta: não roda no Windows e falha de forma
+    menos legível;
+  - comparar o hash do modelo salvo: falharia por motivo irrelevante;
+  - `gitleaks-action`: exige licença em repositório de organização e dá acesso ao
+    repositório a mais uma action;
+  - Trivy só reportando: relatório que ninguém lê;
+  - meta de cobertura: incentiva testar o fácil, não o que quebra a promessa.
+- **Consequências:**
+  - o CI tem quatro jobs: `lint-and-unit`, `runtime-lowest` (ADR-021), `integration`
+    (com o ponta a ponta e o Trivy) e `secrets`;
+  - uma imagem base com CVE corrigível passa a quebrar o CI até o digest ser
+    atualizado: é o sinal desejado, e o processo de atualização está em "Com mais
+    tempo". Um risco aceito vai para o `.trivyignore`, com justificativa;
+  - **o que não é testado, e por quê:**
+    - Docker no Windows e no macOS no CI: os runners hospedados não rodam containers
+      Linux nesses sistemas; os testes de integração e ponta a ponta foram rodados no
+      Windows à mão (registrado em cada ADR) e o mypy roda para as três plataformas;
+    - AWS de verdade: o desenho de produção não tem implementação (fora de escopo);
+    - carga e latência: ficam no E7 (Locust), não na suíte;
+    - drift e retreino: não implementados (ADR-016);
+    - pacote que só publica sdist: não é suportado por decisão (só wheels, ADR-005);
+      a mensagem nesse caso é a do `uv`, não testada com um pacote real;
+    - heurísticas de validação contra projetos reais variados: cobertas por casos
+      escolhidos, não por um corpus;
+    - reprodutibilidade entre máquinas ou com a imagem reconstruída: o teste treina
+      duas vezes na mesma máquina e imagem. Entre hardwares diferentes, o ADR-011 já
+      registra que a igualdade bit a bit não é garantida;
+  - o Trivy no `uv.lock` inclui as ferramentas de desenvolvimento (ruff, mypy): elas
+    rodam no CI com o código do repositório, então também são superfície de supply
+    chain;
+  - **a observar:** o `uv` fixado em `required-version` pode fazer o Dependabot recusar
+    o lock se ele usar outra versão; se acontecer, a faixa vira `>=0.13.5,<0.14`.
 
 ---
 

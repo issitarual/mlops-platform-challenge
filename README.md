@@ -15,8 +15,19 @@ isolado e reprodutível em Docker, rastreamento no MLflow e serving com FastAPI.
 ```bash
 uv sync --all-packages      # instala os 3 pacotes do workspace + ferramentas de dev
 uv run mlship --help
-uv run pytest tests/unit
+uv run pytest tests/unit    # segundos, sem rede nem Docker
 ```
+
+Com Docker e o MLflow no ar (`docker compose up -d`), os testes de integração e o
+ponta a ponta pela CLI (`init` → `validate` → `train` → `promote` → `serve` → `predict`):
+
+```bash
+export MLSHIP_TRACKING_URI=http://127.0.0.1:5000      # PowerShell: $env:MLSHIP_TRACKING_URI = "http://127.0.0.1:5000"
+uv run pytest -m "integration or e2e" tests/integration tests/e2e -v
+```
+
+O CI roda também os testes do runtime com as versões mínimas declaradas, o gitleaks no
+histórico e o Trivy nas dependências e nas imagens (ADR-022).
 
 ## Subir o MLflow
 

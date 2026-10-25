@@ -60,6 +60,11 @@ alternativas, implementou e revisou. As alternativas eram verificadas e revisada
   versionado no desenho).
 - **Tom do DECISIONS.md.** Recusei uma seção que se transformou em "Premissas adotadas".
 
+- **Cache de build no CI.** Questionei por que não usar cache de camadas no CI. A IA
+  manteve a recomendação, mas condicionou a decisão a um dado: com o job de
+  integração em 3m44s, e com o cache exigindo trocar o caminho de build que está
+  sendo testado, ficou sem cache. O critério para revisitar ficou registrado (ADR-022).
+
 ### Erros da IA, encontrados na verificação ou na revisão
 
 - **Recomendação que contradizia uma decisão já tomada.** Para o E3, a IA recomendou
@@ -118,6 +123,14 @@ alternativas, implementou e revisou. As alternativas eram verificadas e revisada
   em problema, o que inviabilizava o `--strict` no CI. Os 299 testes estavam verdes.
   Ficou: leitura a partir dos bytes, como o Python lê; erro claro de codificação;
   análise só do que o `train.py` importa.
+
+- **Dois bugs do produto achados pelo teste ponta a ponta (E6).** Escrever o teste
+  mostrou que o `serve` só removia o container com Ctrl+C (SIGTERM o deixava rodando).
+  Rodá-lo no meu Windows mostrou que a CLI quebrava com a saída redirecionada: o
+  Windows usa cp1252 em pipes, e o MLflow imprime emojis no fim do run. Nenhum teste
+  unitário pegaria isso; a correção veio com testes de regressão. Na mesma revisão
+  saiu um teste unitário antigo que, pelo nome, testava "comando não implementado",
+  mas na prática tentava falar com o MLflow.
 
 ### Achados em que a IA ajudou a diagnosticar
 
