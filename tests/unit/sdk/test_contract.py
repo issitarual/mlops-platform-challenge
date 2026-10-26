@@ -16,6 +16,10 @@ def test_train_output_holds_fields() -> None:
     assert output.input_example == [[1.0]]
 
 
+def test_reference_data_is_optional() -> None:
+    assert TrainOutput(model="m", metrics={}, input_example=None).reference_data is None
+
+
 def test_train_output_is_immutable() -> None:
     output = TrainOutput(model="m", metrics={}, input_example=None)
     with pytest.raises(dataclasses.FrozenInstanceError):

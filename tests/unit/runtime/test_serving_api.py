@@ -169,3 +169,24 @@ def test_a_safe_request_id_is_kept_and_an_unsafe_one_replaced(client: TestClient
     assert kept.headers["X-Request-ID"] == "abc-123"
     replaced = client.get("/health/live", headers={"X-Request-ID": "x\nInjected: 1"})
     assert replaced.headers["X-Request-ID"] != "x\nInjected: 1"
+
+
+def test_drift_is_exposed_per_feature_once_enough_requests_arrived(tmp_path: Path) -> None:
+    model_dir = saved_model(tmp_path, with_reference=True)
+    settings = settings_for(model_dir, drift_window_rows=10, drift_min_rows=5)
+    with TestClient(create_app(settings)) as client:
+        shifted = [{"rooms": 100.0, "age": 3} for _ in range(5)]
+        assert client.post("/v1/predict", json={"rows": shifted}).status_code == 200
+        text = client.get("/metrics").text
+    assert "mlship_drift_monitored_features 2.0" in text
+    psi = {
+        line.split('"')[1]: float(line.rsplit(" ", 1)[1])
+        for line in text.splitlines()
+        if line.startswith("mlship_feature_drift_psi{")
+    }
+    assert psi["rooms"] > 0.2, psi
+
+
+def test_a_model_without_baseline_reports_drift_monitoring_off(client: TestClient) -> None:
+    client.post("/v1/predict", json={"rows": [ROW]})
+    assert "mlship_drift_monitored_features 0.0" in client.get("/metrics").text

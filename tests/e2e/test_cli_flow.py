@@ -2,6 +2,8 @@
 promote -> serve -> predict -> stop. Each step is the installed ``mlship`` command,
 so exit codes, output and the commands working together are what is tested.
 
+It ends with a short load test (Locust) that fails on any error or a p95 above 500 ms.
+
 Needs Docker and network (lock and image build). Run with:
     uv run pytest -m e2e tests/e2e -v
 """
@@ -34,6 +36,7 @@ pytestmark = [
 ]
 
 MLSHIP = shutil.which("mlship", path=str(Path(sys.executable).parent))
+LOAD_TEST = Path(__file__).parents[2] / "loadtest" / "run.py"
 STEP_TIMEOUT = 900
 READY_TIMEOUT = 300
 
@@ -75,6 +78,32 @@ def _get(url: str) -> int:
             return int(response.status)
     except (urllib.error.URLError, OSError):
         return 0
+
+
+def _text(url: str) -> str:
+    with urllib.request.urlopen(url, timeout=5) as response:  # noqa: S310 - localhost
+        return str(response.read().decode())
+
+
+def _load_test(env: dict[str, str], port: int, project: Path) -> str:
+    """The CI latency smoke: a few users for 15 s, zero errors and p95 under 500 ms."""
+    data = {"LOADTEST_DATA": str(project / "data" / "example.csv"), "LOADTEST_TARGET": "target"}
+    command = [
+        sys.executable, str(LOAD_TEST), "--host", f"http://127.0.0.1:{port}",
+        "--scenario", "single", "--users", "5", "--duration", "15s", "--max-p95-ms", "500",
+    ]  # fmt: skip
+    result = subprocess.run(  # noqa: S603 - this interpreter and the repository's script
+        command,
+        env={**env, **data},
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=180,
+        check=False,
+    )
+    output = (result.stdout or "") + (result.stderr or "")
+    assert result.returncode == 0, f"load test:\n{output}"
+    return output
 
 
 def _post(url: str, payload: object) -> tuple[int, dict[str, Any]]:
@@ -171,6 +200,10 @@ def test_a_new_project_goes_from_init_to_predictions(tmp_path: Path, name: str) 
 
         status, body = _post(f"http://127.0.0.1:{port}/v1/predict", {"rows": [{"x": "y"}]})
         assert status == 422 and len(body["details"]) >= 2
+
+        metrics = _text(f"http://127.0.0.1:{port}/metrics")
+        assert "mlship_drift_monitored_features 3.0" in metrics, "init's template has a baseline"
+        print(_load_test(env, port, project))
     finally:
         exit_code = _stop(server)
         log.close()

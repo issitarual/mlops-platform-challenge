@@ -13,7 +13,8 @@ from mlship.domain.errors import (
     ModelIntegrityError,
     ModelNotFoundError,
 )
-from mlship.domain.serving import ServingLimits
+from mlship.domain.serving import THREAD_LIMIT_VARIABLES, ServingLimits
+from mlship.services.ports import HttpProbe
 from mlship.services.serving_service import (
     ENVIRONMENT_KEY_TAG,
     LOCK_SHA256_TAG,
@@ -41,14 +42,27 @@ class World:
         self.version = outcome.model_version
         self.registry.set_alias("demo", "champion", self.version.version, {})
 
-    def serving(self, packager: FakeRuntimePackager | None = None) -> ServingService:
+    def serving(
+        self,
+        packager: FakeRuntimePackager | None = None,
+        *,
+        probe: HttpProbe | None = None,
+        dashboard_url: str | None = None,
+    ) -> ServingService:
         return ServingService(
             self.runs,
             self.registry,
             make_environment(self.runtime, packager),
             self.runtime,
             Sha256Hasher(),
-            ServingPolicy(("a.B",), LIMITS, model_max_bytes=10**6, model_max_files=100),
+            ServingPolicy(
+                ("a.B",),
+                LIMITS,
+                model_max_bytes=10**6,
+                model_max_files=100,
+                dashboard_url=dashboard_url,
+            ),
+            probe,
         )
 
 
@@ -83,8 +97,28 @@ def test_run_publishes_the_port_and_forwards_runtime_settings(tmp_path: Path) ->
     )
     (job,) = world.runtime.serving_jobs
     assert (job.host_port, job.workers, job.limits) == (9000, 2, LIMITS)
-    assert job.environment == {"MLSHIP_SERVING_API_KEY": "k"}
+    assert job.environment == {
+        "MLSHIP_SERVING_API_KEY": "k",
+        **dict.fromkeys(THREAD_LIMIT_VARIABLES, "1"),
+    }
     assert ready == ["http://127.0.0.1:9000"]
+
+
+@pytest.mark.parametrize("workers", [1, 2, 4])
+def test_native_thread_pools_are_one_thread_whatever_the_workers(
+    tmp_path: Path, workers: int
+) -> None:
+    world = World(tmp_path)
+    service = world.serving()
+    service.run(
+        service.prepare(world.project, "demo", "champion"),
+        port=9000,
+        workers=workers,
+        environment={},
+        on_log=lambda _: None,
+        on_ready=lambda _: None,
+    )
+    assert world.runtime.serving_jobs[-1].environment == dict.fromkeys(THREAD_LIMIT_VARIABLES, "1")
 
 
 def test_missing_alias_says_how_to_promote(tmp_path: Path) -> None:

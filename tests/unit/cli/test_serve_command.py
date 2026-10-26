@@ -40,7 +40,16 @@ def test_api_key_is_forwarded_only_when_set(world: World, monkeypatch: pytest.Mo
     monkeypatch.setenv("MLSHIP_SERVING_API_KEY", "k")
     runner.invoke(app, ["serve", "--project", str(world.project), "--model-name", "demo"])
     (job,) = world.runtime.serving_jobs
-    assert job.environment == {"MLSHIP_SERVING_API_KEY": "k"}
+    assert job.environment["MLSHIP_SERVING_API_KEY"] == "k"
+
+
+def test_nothing_but_the_thread_limits_is_set_without_forwarded_settings(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("MLSHIP_SERVING_API_KEY", raising=False)
+    runner.invoke(app, ["serve", "--project", str(world.project), "--model-name", "demo"])
+    (job,) = world.runtime.serving_jobs
+    assert set(job.environment) == {"OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"}
 
 
 def test_serving_an_alias_nobody_has_fails_with_a_hint(world: World) -> None:
@@ -60,6 +69,9 @@ class _TerminatedWhileServing:
     def prepare(self, project_dir: Path, model_name: str, alias: str) -> PreparedServing:
         return self._inner.prepare(project_dir, model_name, alias)
 
+    def dashboard(self) -> str | None:
+        return None
+
     def run(self, *args: object, **kwargs: object) -> None:
         os.kill(os.getpid(), signal.SIGTERM)
         time.sleep(5)
@@ -76,3 +88,29 @@ def test_sigterm_stops_like_ctrl_c_and_restores_the_handler(
     assert result.exit_code == 0, result.output
     assert "Stopped" in result.output
     assert signal.getsignal(signal.SIGTERM) is before
+
+
+class _Probe:
+    def __init__(self, up: bool) -> None:
+        self.up = up
+        self.urls: list[str] = []
+
+    def answers(self, url: str) -> bool:
+        self.urls.append(url)
+        return self.up
+
+
+@pytest.mark.parametrize(
+    ("up", "shown"), [(True, "Dashboard: http://grafana:3000/d/"), (False, "--profile monitoring")]
+)
+def test_serve_points_to_the_dashboard_only_when_it_is_up(
+    world: World, monkeypatch: pytest.MonkeyPatch, up: bool, shown: str
+) -> None:
+    probe = _Probe(up)
+    service = world.serving(probe=probe, dashboard_url="http://grafana:3000")
+    monkeypatch.setattr(
+        "mlship.controllers.serve.load_services", lambda: SimpleNamespace(serving=service)
+    )
+    result = runner.invoke(app, ["serve", "--project", str(world.project), "--model-name", "demo"])
+    assert shown in " ".join(result.output.split())
+    assert probe.urls == ["http://grafana:3000/api/health"]
