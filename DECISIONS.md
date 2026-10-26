@@ -22,7 +22,7 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
 | [013](#adr-013--champion-e-challenger-com-gate-de-promoção) | Champion e challenger com gate de promoção | Aceita (implementação P2) |
 | [014](#adr-014--versionamento-de-dados-por-referência) | Versionamento de dados por referência | Aceita |
 | [015](#adr-015--versionamento-de-ponta-a-ponta-e-de-modelos) | Versionamento de ponta a ponta e de modelos | Aceita |
-| [016](#adr-016--observabilidade-do-serving-e-referência-para-drift) | Observabilidade do serving e referência para drift | Aceita (dashboard P1, referência P2) |
+| [016](#adr-016--observabilidade-do-serving-e-detecção-de-drift) | Observabilidade do serving e detecção de drift | Aceita |
 | [017](#adr-017--formatos-de-modelo-por-nível-de-confiança) | Formatos de modelo por nível de confiança | Aceita (níveis 1 e 2; nível 3 no desenho) |
 | [018](#adr-018--treino-isolado-e-contrato-com-o-runner) | Treino isolado e contrato com o runner | Aceita |
 | [019](#adr-019--lineage-registro-e-promoção) | Lineage, registro e promoção | Aceita |
@@ -66,7 +66,9 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
   metrics, input_example)` + `requirements.txt`. `TrainOutput` vem do `mlship-sdk`, sem
   dependências. O modelo precisa ter `.predict()`, com o pré-processamento dentro dele.
   Campos **opcionais** `primary_metric` e `direction` (`"minimize"` ou `"maximize"`)
-  habilitam o gate de promoção (ADR-013); entram no E3.
+  habilitam o gate de promoção (ADR-013); entram no E3. Campo **opcional**
+  `reference_data` (as features de treino) habilita o monitoramento de drift (ADR-016);
+  entra no E7.
 - **Critério para o contrato:** só se pede o que a ferramenta não consegue inferir **e**
   que muda o comportamento dela. Limitações da ferramenta não viram exigências do
   contrato: qualquer objeto com `.predict()` é aceito, e o formato de serialização é
@@ -505,33 +507,95 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
   - o nome do modelo registrado é o da pasta do projeto, ou `--model-name` (ADR-019);
   - implementação: E3 (registro, aliases; ADR-019) e E4 (serving por versão).
 
-### ADR-016 — Observabilidade do serving e referência para drift
+### ADR-016 — Observabilidade do serving e detecção de drift
 
-- **Contexto:** o ciclo de vida de um modelo não termina no deploy: é preciso ver como
-  ele se comporta em produção e ter uma referência para detectar degradação. O
-  serving já expõe `/metrics` (Prometheus) e a versão do modelo em cada resposta e
-  log, mas sem um painel esses dados não chegam a quem opera.
+- **Contexto:** o ciclo de vida de um modelo não termina no deploy. É preciso ver como
+  ele se comporta em produção e saber quando os dados que chegam deixam de parecer os
+  de treino. O serving já expunha `/metrics` (Prometheus) e a versão do modelo em cada
+  resposta e log, mas sem painel nem alerta esses dados não chegam a quem opera.
 - **Decisão:**
-  - **dashboard (P1, E7):** Prometheus e Grafana no `compose.yaml`, com dashboard
-    provisionado e versionado no repositório: latência p50/p95/p99, throughput, taxa de
-    erro e versão do modelo servida. O `serve` informa o endereço do dashboard;
-  - **referência para drift (P2, E2):** o runner grava no manifesto estatísticas das
-    features de treino (média, quantis). É a base que qualquer detecção de drift
-    precisa;
-  - **desenho de produção:** CloudWatch e SageMaker Model Monitor; alarmes de
-    degradação disparam um pipeline de retreino, que passa pelo gate de promoção
-    (ADR-013) antes do deploy. É esse loop que fecha o ciclo de vida.
+  - **painel (E7):** Prometheus e Grafana no `compose.yaml`, no perfil `monitoring`
+    (`docker compose --profile monitoring up -d`). O dashboard é provisionado e
+    versionado no repositório: latência p50/p95/p99, requisições e linhas por segundo,
+    respostas por status, taxa de 5xx, versão servida e PSI por feature. Grafana só
+    leitura (anônimo como Viewer, sem login) e as duas portas só em `127.0.0.1`. O
+    `serve` mostra o endereço do dashboard quando o Grafana responde e, se não, o
+    comando que sobe o perfil;
+  - **como o Prometheus acha a API:** o `serve` conecta o container da API à rede
+    `mlship-serving` (criada pelo perfil) com o alias `mlship-api`, e o Prometheus usa
+    descoberta por DNS. Funciona igual no Linux, no Windows e no macOS, acha várias
+    APIs ao mesmo tempo e não depende da porta publicada. Só o Prometheus está nessa
+    rede: a API, que roda o modelo do cientista, não compartilha rede com o MLflow nem
+    com o Grafana. Isso não é controle de egress: a API continua com acesso de saída
+    (ADR-020), e não testei se ela alcança o MLflow pelo host no Docker Desktop. Sem o
+    perfil, o `serve` funciona igual, só sem coleta;
+  - **baseline de drift (contrato):** campo **opcional** `reference_data` no
+    `TrainOutput` (as features de treino, ex.: `x_train`). O runner calcula, por feature
+    numérica, os decis e a fração de linhas em cada faixa (mínimo de 100 linhas) e grava
+    `mlship_reference.json` **dentro da pasta do modelo**. Assim a baseline entra no
+    hash do modelo e viaja na imagem de serving, sem nada novo para verificar. Sem
+    `reference_data`, o treino avisa que o monitoramento de drift fica desligado. O
+    exemplo e o template do `init` já passam o campo;
+  - **detecção online:** o serving compara as últimas `MLSHIP_SERVING_DRIFT_WINDOW_ROWS`
+    linhas (padrão 1000) com a baseline pelo PSI (Population Stability Index), depois de
+    um mínimo de `MLSHIP_SERVING_DRIFT_MIN_ROWS` (padrão 200). Expõe
+    `mlship_feature_drift_psi{feature}` e `mlship_drift_monitored_features` (0 indica que
+    o drift está desligado);
+  - **alertas (Prometheus):** `FeatureDrift` (PSI > 0,2 por 1 minuto, o limiar usual de
+    mudança significativa), `HighErrorRate` (> 1% de 5xx por 5 minutos) e
+    `HighLatencyP95` (p95 > 500 ms por 5 minutos). Localmente aparecem na página de
+    alertas do Prometheus e no painel; não são enviados;
+  - **retreino:** só no desenho. O alerta de drift dispara um pipeline que retreina e
+    passa pelo gate de promoção (ADR-013) antes de qualquer deploy. Retreino nunca é
+    automático até produção.
 - **Alternativas descartadas:**
   - só documentar o `/metrics`: os dados existem, mas ninguém os vê sem um `curl`;
-  - comando `mlship monitor` com relatório de drift: alto valor, mas não cabe no prazo;
-    um comando novo no fluxo do cientista só se justifica com esse relatório;
-  - retreino automático implementado: no desenho, com serviços gerenciados.
+  - baseline no manifesto ou calculada pela ferramenta lendo os dados: o manifesto não
+    está na imagem de serving, e a ferramenta não sabe quais colunas do diretório de
+    dados viram features (o pré-processamento é do cientista);
+  - teste KS ou distância de Wasserstein: o PSI é muito usado nesse monitoramento
+    (nasceu em risco de crédito), tem limiares conhecidos (0,1 atenção, 0,2 mudança
+    significativa) e cabe em memória constante por feature. O KS, com milhares de
+    linhas, acusa diferenças irrelevantes;
+  - relatório offline (`mlship monitor` ou Evidently sobre o log de predições): mostra
+    drift depois, não alerta enquanto acontece, e põe um comando novo no fluxo;
+  - retreino automático implementado: sem dado rotulado novo nem pipeline gerenciado,
+    seria retreinar nos mesmos dados. Fica no desenho;
+  - Prometheus raspando `host.docker.internal`: foi a primeira versão. Não funciona no
+    Linux, porque a API é publicada só em `127.0.0.1` do host, e o gateway do Docker
+    não chega lá. Publicar em `0.0.0.0` exporia a API na rede local;
+  - Prometheus com `network_mode: host`: no Docker Desktop (Windows e macOS) depende
+    de um recurso opcional.
 - **Consequências:**
-  - na apresentação, o teste de carga e o dashboard mostram a latência ao vivo;
-  - o drift fica preparado (referência no manifesto e predições amostradas), mas não
-    implementado;
-  - **se não couber no prazo:** fica o `/metrics` e este ADR, e o dashboard vai para
-    "Com mais tempo".
+  - na apresentação, o teste de carga mostra a latência no painel ao vivo, e o cenário
+    `drift` do Locust faz o PSI subir e o alerta disparar;
+  - **mudança de contrato, opcional:** projetos existentes continuam válidos, só sem
+    drift;
+  - **limites conhecidos:**
+    - a baseline vem do código do cientista, como métricas e modelo. Uma baseline
+      errada gera alerta falso ou silêncio, não risco à plataforma;
+    - só features numéricas. Categóricas pediriam frequência por categoria (com mais
+      tempo);
+    - com vários workers, cada um vê só as suas requisições, e o `/metrics` mostra o
+      maior PSI entre eles (modo multiprocesso `max`). É conservador (alerta mais
+      cedo), e cada janela precisa do mínimo de linhas;
+    - drift de dados não é queda de qualidade: sem rótulos, o PSI só diz que os dados
+      mudaram. Qualidade de verdade pede rótulos atrasados, no desenho;
+    - o PSI só é recalculado quando chega requisição: sem tráfego, o último valor fica
+      exposto e um alerta de drift disparado continua disparado até o tráfego voltar ao
+      normal. Também não há distinção entre modelos: `max by (feature)` junta APIs
+      diferentes que tenham features com o mesmo nome;
+    - a amostra de quem testa importa: o Locust rodou com as primeiras 5000 linhas do
+      CSV da Califórnia, ordenado por região, e o alerta disparou com PSI de 1,0 a 1,3
+      em Latitude e Longitude. Conferido nos dados: o PSI das primeiras 5000 linhas
+      contra o conjunto todo é 1,16 e 1,02; com amostra aleatória, ≈ 0. O monitor
+      acertou, a amostra do teste de carga estava enviesada (agora é aleatória, com
+      seed);
+  - o painel e o alerta não têm teste automatizado. Foram verificados com o cenário de
+    drift do Locust (o PSI da feature deslocada passou de 2: 2,15 num teste em
+    Linux e 8,3 no Windows, com 2 workers). Nessa execução o `FeatureDrift` ficou em
+    *firing* só para `MedInc` (PSI 8,28, depois de 1 minuto) e os outros dois alertas
+    ficaram inativos. O ponta a ponta verifica que a baseline chega ao serving.
 
 ### ADR-017 — Formatos de modelo por nível de confiança
 
@@ -810,6 +874,35 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
     em tmpfs, `cap_drop ALL`, `no-new-privileges`, limites de CPU, memória e
     processos). A diferença é a rede: a API precisa receber requisições, publicada só
     em `127.0.0.1`;
+  - **threads das bibliotecas nativas (E7):** `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS` e
+    `MKL_NUM_THREADS` ficam em `1` no container de serving. Sem limite, o OpenMP do
+    `HistGradientBoostingRegressor` dimensiona o pool pelos CPUs do host (28 na máquina de
+    teste), não pela cota do container (2), e cada predição simultânea abre o seu: o Docker
+    segura o container (CFS throttling) e a latência vai de milissegundos a segundos. A
+    capacidade vem dos workers e das réplicas, como é usual em serving online. Medido
+    (Windows, 28 CPUs, container com 2 CPUs, 20 usuários, 60 s):
+
+    | Configuração | `single` (req/s, p95) | `batch` de 100 linhas (req/s, p95) |
+    | --- | --- | --- |
+    | 2 workers, sem limite | 17, 2300 ms | 14,7, 2200 ms |
+    | 2 workers, 1 thread | 335, 72 ms | 299, 99 ms |
+    | 1 worker, 1 thread | 221, 120 ms | 163, 170 ms |
+    | 1 worker, 2 threads (`cpus ÷ workers`) | 353, 68 ms | 9,6, 3300 ms |
+
+    O `batch` é a diferença que importa: de 9,6 para 163 req/s com 1 worker. O `single`
+    com 2 threads (353 req/s) ficou acima do de 1 thread (221 req/s) e não sei explicar:
+    pode ser ruído da máquina (o Locust roda junto, e o Docker Desktop divide o host) ou
+    diferença de configuração dessa medição, que não conferi com `docker inspect`;
+    Alternativas descartadas:
+    - `max(1, cpus ÷ workers)` threads (a primeira versão): resolveu com 2 workers, mas com
+      1 worker deixou 2 threads por predição e o `batch` continuou em 9,6 req/s. A
+      concorrência vem também das threads de requisição de cada worker, não só dos workers;
+    - expor como configuração: mais uma opção, e o padrão ainda precisaria ser escolhido.
+
+    Predição grande e isolada não usa os 2 núcleos; para volume grande de linhas, o
+    caminho é a inferência em lote como job separado (desenho). Limitar as predições
+    simultâneas por worker e devolver 429 acima disso (backpressure) fica em "Com mais
+    tempo". O pool de threads do FastAPI aceita até 40 predições ao mesmo tempo;
   - **`serve` em primeiro plano (D4):** mostra o que verificou, o endereço e os logs;
     Ctrl+C para e remove o container. Se a API parar sozinha (falta de memória,
     crash), o comando termina com erro, código de saída e dica. Quem quiser em segundo
@@ -1036,8 +1129,10 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
       Linux nesses sistemas; os testes de integração e ponta a ponta foram rodados no
       Windows à mão (registrado em cada ADR) e o mypy roda para as três plataformas;
     - AWS de verdade: o desenho de produção não tem implementação (fora de escopo);
-    - carga e latência: ficam no E7 (Locust), não na suíte;
-    - drift e retreino: não implementados (ADR-016);
+    - carga e latência: o ponta a ponta roda um smoke de 15 s (zero erros, p95 abaixo
+      de 500 ms); números de capacidade vêm do Locust em máquina conhecida (README);
+    - painel e alertas: verificados à mão com o cenário de drift; retreino só no
+      desenho (ADR-016);
     - pacote que só publica sdist: não é suportado por decisão (só wheels, ADR-005);
       a mensagem nesse caso é a do `uv`, não testada com um pacote real;
     - heurísticas de validação contra projetos reais variados: cobertas por casos
@@ -1060,7 +1155,8 @@ Itens fora do escopo do código; todos aparecem no desenho de arquitetura:
 - multi-tenant e autenticação completa (local: API key opcional; no desenho: IAM/JWT);
 - GPU e treino distribuído;
 - busca de hiperparâmetros;
-- monitoramento de drift implementado (base: log amostrado de predições);
+- retreino automático (o alerta de drift está implementado; ADR-016);
+- monitoramento de qualidade com rótulos atrasados;
 - inferência em lote implementada;
 - canary e shadow deploy (no desenho; o gate offline está no ADR-013);
 - feature store implementada;
@@ -1082,6 +1178,9 @@ Itens fora do escopo do código; todos aparecem no desenho de arquitetura:
   (ADR-019).
 - Comando para registrar de novo um run cujo upload falhou (`mlship register <run>`),
   a partir do que ficou no disco (ADR-019).
+- Limite de predições simultâneas por worker, com 429 acima dele (backpressure; ADR-020).
+- Drift de features categóricas (frequência por categoria) e de predições, além das
+  numéricas; alerta enviado (Alertmanager) em vez de só exibido (ADR-016).
 - Saída SARIF no `validate`, para anotar os problemas direto no PR do GitHub (ADR-021).
 - Avaliação feita pela ferramenta: champion e candidato avaliados no mesmo holdout fixo,
   para que o gate de promoção não dependa de métricas calculadas pelo código do
@@ -1091,7 +1190,13 @@ Itens fora do escopo do código; todos aparecem no desenho de arquitetura:
 
 | Dia | Data | Horas | Foco |
 | --- | --- | --- | --- |
-| D1 | 21/10 | | Planejamento, decisões A–D |
-| D2 | 22/10 | | E0: estrutura, tooling, exemplo, CI |
-| D3 | 23/10 | | E1 (lock e imagem) e E2 (treino isolado), revisão |
-| D4 | 24/10 | | E3 (lineage e registro), revisão, testes no Windows, E4 (serving), revisão, E5 (validação e `init`) |
+| D1 | 21/10 | ≈ 2–3 | Planejamento, decisões A–D |
+| D2 | 22/10 | ≈ 6–7 | E0: estrutura, tooling, exemplo, CI |
+| D3 | 23/10 | ≈ 8–9 | E1 (lock e imagem) e E2 (treino isolado), revisão |
+| D4 | 24/10 | ≈ 8–10 | E3 (lineage e registro), revisão, testes no Windows, E4 (serving), revisão, E5 (validação e `init`) |
+| D5 | 25/10 | ≈ 8–9 | Revisão do E5, E6 (testes ponta a ponta e CI), E7 (carga, painel, drift e alertas) |
+| D6 | 26/10 | ≈ 2 até agora | E7: testes no Windows, medição de carga, correções (threads do serving, amostra do teste de carga, painel) |
+
+Horas estimadas, não cronometradas: partem das janelas de commits de cada dia e da duração
+das sessões de trabalho com a IA, e incluem os testes na minha máquina. Servem de ordem de
+grandeza, não de apontamento.

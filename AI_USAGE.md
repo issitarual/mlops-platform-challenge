@@ -132,6 +132,37 @@ alternativas, implementou e revisou. As alternativas eram verificadas e revisada
   saiu um teste unitário antigo que, pelo nome, testava "comando não implementado",
   mas na prática tentava falar com o MLflow.
 
+- **Decisão registrada como feita sem ter sido implementada (E2 a E7).** O ADR-016 e o
+  plano do sprint diziam que o runner já gravava estatísticas das features de treino no
+  manifesto (E2). Não gravava: a IA registrou a intenção como fato. Apareceu no E7,
+  ao procurar essa baseline para o drift, e a IA avisou antes de seguir. A baseline foi
+  implementada (agora dentro da pasta do modelo, coberta pelo hash), e o ADR reescrito.
+  Desde então, cada afirmação de "implementado" nos docs é conferida no código.
+- **Coleta do Prometheus que não funcionaria no Linux (E7).** A primeira versão, a
+  recomendação aceita, raspava `host.docker.internal`. Na revisão, a IA viu que a API é
+  publicada só em `127.0.0.1` do host, que o gateway do Docker no Linux não alcança. No
+  Docker Desktop isso deve passar, então o teste na minha máquina provavelmente não pegaria. Passou para
+  uma rede só entre a API e o Prometheus, com descoberta por DNS (ADR-016).
+
+- **Serving sem limite de threads (E4, achado no E7) e a primeira correção, que
+  também estava errada.** O treino limitava as threads das bibliotecas nativas pela cota
+  de CPU, mas o serving não, e a IA não percebeu a diferença ao escrever o E4. Com 28
+  CPUs no host e 2 na cota, o teste de carga deu 17 req/s e p95 de 2,3 s, contra 101
+  req/s e p95 de 56 ms em outro cenário. Rodei o teste e a IA estranhou os números,
+  comparando os cenários, e levantou a hipótese (CFS throttling). Ela recomendou
+  `cpus ÷ workers` threads e eu aceitei. A medição desmentiu: com 2 workers (1 thread)
+  foi de 17 para 335 req/s, mas com 1 worker (2 threads) o `batch` ficou em 9,6 req/s.
+  A IA reviu a recomendação, expôs os números lado a lado e propôs 1 thread por
+  predição, que adotei: com 1 worker o `batch` foi para 163 req/s e p95 de 170 ms. Lição: a recomendação veio de raciocínio, e só a medição em mais
+  de uma configuração achou o furo (ADR-020).
+- **Dados de carga enviesados na própria IA (E7).** O script de Locust usava as
+  primeiras 5000 linhas do CSV, que na Califórnia estão ordenadas por região. O
+  dashboard mostrou o alerta de drift disparado sem nenhum deslocamento proposital.
+  A IA conferiu nos dados antes de concluir: PSI de 1,16 e 1,02 em Latitude e
+  Longitude com as primeiras linhas e ≈ 0 com amostra aleatória. O drift estava certo,
+  o teste é que estava errado. Também saíram do mesmo print: painel de erro sem dado
+  quando não há 5xx e "Model served" mostrando o valor `1` em vez do modelo.
+
 ### Achados em que a IA ajudou a diagnosticar
 
 - **Imagem corrompida com o disco cheio.** O treino morria com `SIGBUS` e sem log. A IA
@@ -144,6 +175,9 @@ alternativas, implementou e revisou. As alternativas eram verificadas e revisada
 
 ## Limites do uso de IA
 
+- As horas do "Tempo gasto" (DECISIONS.md) são estimativas por faixa, sugeridas pela IA a
+  partir das datas dos commits e da duração das sessões, e ajustadas por mim; a IA não
+  tem como medir o trabalho feito fora da conversa.
 - O ambiente da IA não alcançava o Docker Hub nem o `ghcr.io`: o build real das
   imagens, o digest do servidor MLflow e os testes no Windows foram feitos por mim e
   pelo CI.

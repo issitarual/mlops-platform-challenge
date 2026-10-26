@@ -45,7 +45,21 @@ uv run mlship train my-model --data my-model/data
 
 O projeto criado passa na validação e treina como está; troque o modelo e os dados
 pelos seus. O contrato é só `train.py` com `train(data_dir, params) -> TrainOutput` e
-um `requirements.txt`.
+um `requirements.txt`:
+
+```python
+from mlship_sdk import TrainOutput
+
+
+def train(data_dir: Path, params: dict) -> TrainOutput:
+    ...
+    return TrainOutput(
+        model=pipeline,  # qualquer objeto com .predict(), pré-processamento dentro
+        metrics={"rmse": rmse},  # números finitos
+        input_example=x_test.head(5),  # gera o schema da API e o smoke test
+        reference_data=x_train,  # opcional: baseline para detectar drift no serving
+    )
+```
 
 O `validate` lê o código sem executá-lo (o `train.py` e os módulos que ele importa)
 e mostra **todos** os problemas de uma vez, cada um com o local e como corrigir:
@@ -120,6 +134,52 @@ fica em `/docs`; health em `/health/live` e `/health/ready`; métricas em `/metr
   a `/v1/*` passam a exigir o header `X-API-Key`.
 - **Em segundo plano:** a imagem de serving é autossuficiente:
   `docker run -d -p 127.0.0.1:8080:8080 <imagem mostrada pelo serve>`.
+
+## Monitorar
+
+```bash
+docker compose --profile monitoring up -d
+```
+
+Sobe Prometheus (http://127.0.0.1:9090) e Grafana (http://127.0.0.1:3000, só leitura,
+sem login). Com o perfil no ar, o `serve` mostra o endereço do dashboard, e cada API
+iniciada entra na coleta, em qualquer porta. O dashboard mostra latência p50/p95/p99,
+requisições e linhas por segundo, respostas por status, taxa de 5xx, a versão servida
+e o drift (PSI) por feature.
+
+- **Drift:** se o treino passou `reference_data`, o serving compara as últimas 1000
+  linhas recebidas com a distribuição de treino. PSI acima de 0,2 por 1 minuto dispara
+  o alerta `FeatureDrift`.
+- **Alertas:** `FeatureDrift`, `HighErrorRate` (5xx acima de 1%) e `HighLatencyP95`
+  (p95 acima de 500 ms), em http://127.0.0.1:9090/alerts. Localmente são exibidos, não
+  enviados.
+
+## Teste de carga
+
+Com o modelo servido (`mlship serve`), em outro terminal:
+
+```bash
+uv run python loadtest/run.py --scenario single --users 20 --duration 60s --label "2 workers"
+uv run python loadtest/run.py --scenario batch --users 20 --duration 60s --label "2 workers"   # 100 linhas por requisição
+uv run python loadtest/run.py --scenario drift --users 5 --duration 120s   # faz o alerta de drift disparar
+```
+
+O script roda o Locust sem interface e imprime a linha da tabela abaixo. No CI, o
+teste ponta a ponta roda um smoke de 15 s que falha com qualquer erro ou p95 acima de
+500 ms.
+
+Resultados com `serve --workers 1` e `--workers 2` (indicado no cenário). O container
+da API tem limite de 2 CPUs e 2 GB, e a máquina é de 28 CPUs:
+
+| Scenario | Users | Requests | Req/s | p50 ms | p95 ms | p99 ms | Failures | Machine |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| single (1 worker) | 20 | 13070 | 220.6 | 89 | 120 | 140 | 0 | Windows AMD64, 28 CPUs |
+| batch (1 worker) | 20 | 9654 | 163.0 | 120 | 170 | 190 | 0 | Windows AMD64, 28 CPUs |
+| single (2 workers) | 20 | 19774 | 334.8 | 60 | 72 | 84 | 0 | Windows AMD64, 28 CPUs |
+| batch (2 workers) | 20 | 17659 | 298.6 | 65 | 99 | 120 | 0 | Windows AMD64, 28 CPUs |
+
+Servidor e Locust na mesma máquina disputam CPU, então os números são um piso, não a
+capacidade de uma instância dedicada.
 
 ## Estrutura
 
