@@ -16,6 +16,7 @@ from mlship.domain.errors import (
 from mlship.domain.serving import THREAD_LIMIT_VARIABLES, ServingLimits
 from mlship.services.ports import HttpProbe
 from mlship.services.serving_service import (
+    ALLOW_PICKLE_TAG,
     ENVIRONMENT_KEY_TAG,
     LOCK_SHA256_TAG,
     SERIALIZATION_TAG,
@@ -48,6 +49,7 @@ class World:
         *,
         probe: HttpProbe | None = None,
         dashboard_url: str | None = None,
+        allow_pickle_enabled: bool = True,
     ) -> ServingService:
         return ServingService(
             self.runs,
@@ -60,6 +62,7 @@ class World:
                 LIMITS,
                 model_max_bytes=10**6,
                 model_max_files=100,
+                allow_pickle_enabled=allow_pickle_enabled,
                 dashboard_url=dashboard_url,
             ),
             probe,
@@ -190,15 +193,40 @@ def test_runs_without_a_recorded_lock_are_refused(tmp_path: Path) -> None:
         world.serving().prepare(world.project, "demo", "champion")
 
 
-def test_pickle_is_allowed_only_for_a_model_recorded_as_pickled(tmp_path: Path) -> None:
+def test_pickle_is_allowed_only_when_the_operator_allowed_it_at_train_time(
+    tmp_path: Path,
+) -> None:
     world = World(tmp_path, allow_pickle=True)
     tags = world.runs.runs[world.version.run_id]["tags"]
+    assert tags[ALLOW_PICKLE_TAG] == "true"
     service = world.serving()
     tags[SERIALIZATION_TAG] = "skops"
     service.prepare(world.project, "demo", "champion")
     tags[SERIALIZATION_TAG] = "cloudpickle"
     service.prepare(world.project, "demo", "champion")
     assert [spec.allow_pickle for spec, _ in world.runtime.serving_specs] == [False, True]
+
+
+def test_a_model_that_claims_cloudpickle_without_the_operators_flag_is_not_served_with_pickle(
+    tmp_path: Path,
+) -> None:
+    world = World(tmp_path)  # trained without --allow-pickle
+    tags = world.runs.runs[world.version.run_id]["tags"]
+    assert tags[ALLOW_PICKLE_TAG] == "false"
+    tags[SERIALIZATION_TAG] = "cloudpickle"  # what a forged result.json would have produced
+    world.serving().prepare(world.project, "demo", "champion")
+    ((spec, _),) = world.runtime.serving_specs
+    assert spec.allow_pickle is False
+
+
+def test_the_platform_can_forbid_pickle_at_serve_time_even_for_an_allowed_run(
+    tmp_path: Path,
+) -> None:
+    world = World(tmp_path, allow_pickle=True)
+    world.runs.runs[world.version.run_id]["tags"][SERIALIZATION_TAG] = "cloudpickle"
+    world.serving(allow_pickle_enabled=False).prepare(world.project, "demo", "champion")
+    ((spec, _),) = world.runtime.serving_specs
+    assert spec.allow_pickle is False
 
 
 def test_every_serve_downloads_and_verifies_again(tmp_path: Path) -> None:

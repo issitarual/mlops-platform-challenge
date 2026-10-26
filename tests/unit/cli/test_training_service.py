@@ -278,6 +278,35 @@ def test_oversized_model_is_refused_and_nothing_is_uploaded(tmp_path: Path) -> N
     assert "model" not in runs.runs[outcome.run_id]["artifacts"] and registry.versions == {}
 
 
+CLOUDPICKLE_RESULT = {
+    **GOOD_RESULT,
+    "model": {"path": "model", "serialization": "cloudpickle", "trusted_types": []},
+}
+
+
+def test_a_result_claiming_cloudpickle_without_the_flag_fails_the_run(tmp_path: Path) -> None:
+    project, data = make_project(tmp_path)
+    runs, registry = FakeRunRepository(), FakeModelRegistry()
+    runtime = RecordingTrainingRuntime(result=CLOUDPICKLE_RESULT)  # as a forged result.json
+    outcome = make_service(runtime, runs=runs, registry=registry).train(
+        project, data, {}, model_name="demo"
+    )
+    assert not outcome.succeeded
+    assert [i.code for i in outcome.issues] == ["MODEL_SERIALIZATION_NOT_ALLOWED"]
+    assert registry.versions == {}
+
+
+def test_a_result_with_cloudpickle_passes_when_the_operator_allowed_it(tmp_path: Path) -> None:
+    project, data = make_project(tmp_path)
+    runs, registry = FakeRunRepository(), FakeModelRegistry()
+    runtime = RecordingTrainingRuntime(result=CLOUDPICKLE_RESULT)
+    outcome = make_service(runtime, runs=runs, registry=registry).train(
+        project, data, {}, model_name="demo", allow_pickle=True
+    )
+    assert outcome.succeeded and outcome.serialization == "cloudpickle"
+    assert runs.runs[outcome.run_id]["tags"]["mlship.allow_pickle"] == "true"
+
+
 def test_param_problems_are_reported_together_before_anything_runs(tmp_path: Path) -> None:
     project, data = make_project(tmp_path)
     runtime, runs = RecordingTrainingRuntime(), FakeRunRepository()

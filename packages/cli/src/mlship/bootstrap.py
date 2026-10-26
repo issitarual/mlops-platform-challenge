@@ -97,6 +97,7 @@ def build_services(settings: Settings) -> Services:
                 ),
                 model_max_bytes=settings.model_max_bytes,
                 model_max_files=settings.model_max_files,
+                allow_pickle_enabled=settings.allow_pickle_enabled,
                 dashboard_url=settings.dashboard_url,
             ),
             UrllibProbe(),

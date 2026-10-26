@@ -45,6 +45,7 @@ from mlship.services.training_result import parse_result
 from mlship.services.validation.validator import ProjectValidator
 
 DEFAULT_SEED = 42
+_SAFE_SERIALIZATION = "skops"
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +189,19 @@ class TrainingService:
         )
         succeeded, issues = parsed.succeeded, parsed.issues
         model_files: dict[str, str] = {}
+        if succeeded and parsed.serialization != _SAFE_SERIALIZATION and not inputs.allow_pickle:
+            succeeded = False
+            issues = (
+                ValidationIssue(
+                    "MODEL_SERIALIZATION_NOT_ALLOWED",
+                    Severity.ERROR,
+                    f"The model reports {parsed.serialization!r} serialization, "
+                    "but --allow-pickle was not given.",
+                    "result.json",
+                    "Use a scikit-learn model (saved with skops), or train with --allow-pickle "
+                    "if you trust this code.",
+                ),
+            )
         if succeeded:
             try:
                 model_files = self._hasher.untrusted_tree(
@@ -234,6 +248,7 @@ class TrainingService:
             },
             metrics=parsed.metrics,
             model_serialization=parsed.serialization if succeeded else None,
+            allow_pickle=inputs.allow_pickle,
             model_files=model_files,
             errors=issue_dicts(issues),
             warnings=issue_dicts(inputs.warnings),

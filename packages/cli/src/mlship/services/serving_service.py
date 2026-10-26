@@ -34,6 +34,7 @@ from mlship.services.run_recorder import LOCK_ARTIFACT
 LOCK_SHA256_TAG = "mlship.lock_sha256"
 ENVIRONMENT_KEY_TAG = "mlship.environment_key"
 SERIALIZATION_TAG = "mlship.serialization"
+ALLOW_PICKLE_TAG = "mlship.allow_pickle"
 DASHBOARD_UID = "mlship-serving"
 _PICKLE_SERIALIZATION = "cloudpickle"
 
@@ -46,6 +47,7 @@ class ServingPolicy:
     limits: ServingLimits
     model_max_bytes: int
     model_max_files: int
+    allow_pickle_enabled: bool
     cache_dirname: str = ".mlship/serving"
     dashboard_url: str | None = None
 
@@ -76,6 +78,15 @@ class ServingService:
             return None
         return f"{base}/d/{DASHBOARD_UID}"
 
+    def _pickle_allowed(self, tags: Mapping[str, str]) -> bool:
+        """Only the operator can allow pickle: the flag recorded by the host at train time and
+        the platform switch. The model's own serialization claim can only narrow it (ADR-017)."""
+        return (
+            self._policy.allow_pickle_enabled
+            and tags.get(ALLOW_PICKLE_TAG) == "true"
+            and tags.get(SERIALIZATION_TAG) == _PICKLE_SERIALIZATION
+        )
+
     def prepare(self, project_dir: Path, model_name: str, alias: str) -> PreparedServing:
         self._runs.check_available()
         model = self._registry.get_alias(model_name, alias)
@@ -96,7 +107,7 @@ class ServingService:
             ServingImageSpec(
                 base=environment[0],
                 model=model,
-                allow_pickle=tags.get(SERIALIZATION_TAG) == _PICKLE_SERIALIZATION,
+                allow_pickle=self._pickle_allowed(tags),
                 skops_trusted_types=self._policy.skops_trusted_types,
             ),
             model_dir,

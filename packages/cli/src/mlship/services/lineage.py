@@ -98,6 +98,7 @@ def manifest_tags(manifest: Manifest) -> dict[str, str]:
         else str(manifest.tool.git_dirty).lower(),
         "model_sha256": manifest.model_sha256,
         "serialization": manifest.model_serialization,
+        "allow_pickle": str(manifest.allow_pickle).lower(),
         "errors": ",".join(e["code"] for e in manifest.errors) or None,
     }
     return {f"{_TAG_PREFIX}{k}": v for k, v in values.items() if v}

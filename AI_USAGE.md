@@ -184,6 +184,25 @@ alternativas, implementou e revisou. As alternativas eram verificadas e revisada
   deixou de fora o Batch Transform, que era a única inferência em lote do desenho. Notei na
   revisão e o cartão voltou para o passo 4. O lote continua só no desenho.
 
+- **Pickle autoconcedido pelo `train.py` (revisão externa, E9).** Uma revisão externa, trazida
+  pela Laura para avaliar, apontou que o serving liberava pickle com
+  base na tag `mlship.serialization`, vinda do `result.json`, que o próprio `train.py` pode
+  escrever (roda no mesmo processo do runner). A IA que escreveu o código não tinha visto: a
+  decisão de confiança estava no código do cientista, contra o ADR-017. Conferi a cadeia no
+  código antes de aceitar (o achado procede), e a correção ficou menor que a proposta: o host
+  grava a tag `mlship.allow_pickle` a partir da flag, o treino sem flag recusa serialização
+  diferente de skops, e o serving só libera pickle com a tag, a plataforma ligada e a
+  serialização registrada. A opção `serve --allow-pickle` explícita ficou em "Com mais
+  tempo", por decisão da Laura. Três testes novos cobrem o caso (resultado forjado,
+  plataforma desligada, tag ausente). Rodei unitários, mypy e ruff, mas não o e2e com Docker.
+- **Achados da mesma revisão que rebaixei ou ajustei.** O vetor de `.pth` (dependência que
+  executa código antes da política de carga) é real, mas uma dependência maliciosa já
+  executa código no `import`; recusar `.pth` quebraria pacotes legítimos, então virou
+  registro no ADR-017, não código. O ADR-017 também afirmava que o serving não tem rede e
+  que o `serve` avisa de modelos pickle, e nenhuma das duas coisas é verdade: corrigi o
+  texto. O split do exemplo e do template dependia da seed do modelo; agora é fixo
+  (`SPLIT_SEED`), com um baseline de média.
+
 ### Achados em que a IA ajudou a diagnosticar
 
 - **Imagem corrompida com o disco cheio.** O treino morria com `SIGBUS` e sem log. A IA

@@ -623,12 +623,20 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
     mensagem que diz qual tipo é e como liberá-lo;
   - **nível 2, com aceitação explícita:** qualquer objeto com `.predict()`, via pyfunc
     genérico em `cloudpickle`, só com `train --allow-pickle`. A escolha fica no
-    manifesto, a CLI e o `serve` avisam, e a plataforma pode desligar essa opção por
-    configuração;
+    manifesto e numa tag do run (`mlship.allow_pickle`), gravadas pelo host a partir da
+    flag; o `train` avisa (o `serve` ainda não avisa), e a plataforma pode desligar essa
+    opção por configuração (`MLSHIP_ALLOW_PICKLE_ENABLED`), no treino e no serving;
   - **nível 3 (desenho, "Com mais tempo"):** formatos nativos de XGBoost, LightGBM ou
     ONNX, sem pickle. Ainda a verificar se os flavors do MLflow usam esses formatos;
   - a confiança é concedida **por quem opera** (configuração do host ou flag), nunca
-    pelo `train.py`; os tipos confiáveis e o nível usado vão para o manifesto.
+    pelo `train.py`; os tipos confiáveis e o nível usado vão para o manifesto;
+  - **o `result.json` não concede confiança:** o `train.py` roda no mesmo processo do
+    runner e pode escrever qualquer `result.json`, inclusive declarar `cloudpickle`. Por
+    isso o host (1) recusa o resultado com serialização diferente de `skops` quando o
+    treino foi sem `--allow-pickle` (`MODEL_SERIALIZATION_NOT_ALLOWED`) e (2) só monta a
+    imagem de serving com pickle liberado se a tag `mlship.allow_pickle` do run for
+    `true`, a plataforma permitir e a serialização registrada for `cloudpickle`. O que o
+    resultado declara só pode restringir.
 - **Alternativas descartadas:**
   - restringir a v1 a scikit-learn: seguro, mas fecha a plataforma para modelos comuns
     e empurra usuários para fora dela;
@@ -644,8 +652,18 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
   - a lista de tipos confiáveis fica gravada no `MLmodel`, que o hash calculado pelo
     host protege contra adulteração (ADR-006);
   - o risco residual (travamento ou leitura de memória nos tipos de árvore; execução
-    de código no nível 2) é contido pelo container de serving: sem credenciais, sem rede
-    de saída, sistema de arquivos read-only, usuário não-root.
+    de código no nível 2) é contido só em parte pelo container de serving: sem
+    credenciais, sistema de arquivos read-only, usuário não-root. **Localmente ele tem
+    saída de rede** (ADR-020), então um modelo pickle poderia tentar enviar os payloads
+    de inferência para fora; em produção o egress é fechado por security groups
+    (ADR-023). Isolar a rede do serving localmente fica em "Com mais tempo";
+  - **vetor das dependências (não reproduzido):** a imagem de serving é a do treino, com
+    os pacotes do cientista. Uma dependência maliciosa (por exemplo, um arquivo `.pth`
+    com `import`) executa código ao iniciar o interpretador, antes da política de carga.
+    O nível 1 garante que o código **do cientista** não roda no serving, não que o
+    código de terceiros do lock não roda. Mitigações: lock com hashes, só wheels e, em
+    produção, proxy de pacotes com allowlist (ADR-023). Recusar `.pth` no self-check não
+    foi implementado: quebraria pacotes legítimos e é uma decisão de allowlist.
 
 ### ADR-018 — Treino isolado e contrato com o runner
 
@@ -1254,6 +1272,9 @@ Itens fora do escopo do código; todos aparecem no desenho de arquitetura:
 - Avaliação feita pela ferramenta: champion e candidato avaliados no mesmo holdout fixo,
   para que o gate de promoção não dependa de métricas calculadas pelo código do
   cientista (ADR-013).
+- Contenção de rede do serving localmente (rede Docker interna com um proxy que publica a
+  porta) e aviso no `serve` de modelo pickle; `serve --allow-pickle` explícito, para que a
+  confiança também seja concedida no momento de servir (ADR-017).
 - Região única na versão base: recuperação de desastre entre regiões (replicação do S3 e
   do ECR) como evolução (ADR-023).
 - Decisão de promover em produção: gate automático mais aprovação humana, em vez de

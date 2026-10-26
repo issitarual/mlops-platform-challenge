@@ -88,6 +88,7 @@ class Manifest:
     limits: Mapping[str, Any]
     metrics: Mapping[str, float]
     model_serialization: str | None
+    allow_pickle: bool
     model_files: Mapping[str, str]
     errors: tuple[Mapping[str, str], ...] = ()
     warnings: tuple[Mapping[str, str], ...] = ()
@@ -133,6 +134,7 @@ class Manifest:
             },
             "params": dict(self.params),
             "seed": self.seed,
+            "allow_pickle": self.allow_pickle,
             "limits": dict(self.limits),
             "metrics": dict(self.metrics),
             "model": None

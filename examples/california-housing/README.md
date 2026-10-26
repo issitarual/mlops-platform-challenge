@@ -31,3 +31,6 @@ de origem mudar, o script falha e não grava nada.
 | `seed` | 42 |
 | `learning_rate` | 0.1 |
 | `max_iter` | 200 |
+
+O `seed` controla só o modelo; a divisão treino/teste é fixa (`SPLIT_SEED`), para que as métricas de runs diferentes sejam
+comparáveis. `baseline_rmse` é o erro de prever sempre a média: o modelo precisa ficar bem abaixo dele.

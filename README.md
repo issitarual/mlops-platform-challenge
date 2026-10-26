@@ -364,7 +364,8 @@ Isso atualiza o `mlship.lock`, que trava cada dependência com hash. **Commite o
 
 Por padrão, a ferramenta só aceita estimadores do scikit-learn. Para outros tipos de modelo, use
 `--allow-pickle` no `train`. Atenção: carregar um modelo salvo com pickle pode executar código arbitrário; a
-escolha fica registrada no run (ADR-017).
+escolha fica registrada no run (ADR-017). O `serve` só carrega pickle de um run treinado com essa flag, e o
+treino sem a flag recusa um modelo que não seja `skops`.
 
 ```bash
 uv run mlship train meu-modelo --data meu-modelo/data --allow-pickle
@@ -498,7 +499,7 @@ O código do cientista e tudo que ele produz são tratados como **não confiáve
 | Container de treino | Sem rede, usuário não-root, sistema de arquivos somente leitura, `/tmp` em memória, sem capabilities, sem novos privilégios; limites de 2 CPUs, 4 GB, 256 processos e 1 hora |
 | Saída do treino | Só `/output` é gravável; o **host** recalcula os hashes e é quem registra no MLflow |
 | Modelo | O container de treino não tem o endereço do MLflow nem credenciais; o hash é conferido antes de qualquer `load` |
-| Container de serving | Não-root, somente leitura, sem credenciais e sem acesso ao MLflow; limites de 2 CPUs e 2 GB |
+| Container de serving | Não-root, somente leitura, sem credenciais e sem acesso ao MLflow; limites de 2 CPUs e 2 GB. **Tem saída de rede localmente**; em produção o egress é fechado por security groups |
 | API | Schema validado, limites de payload (1 MB) e de linhas (1000), timeout de 10 s, erros sem stack trace |
 | CI | gitleaks, Trivy nas dependências e nas imagens, Dependabot |
 
