@@ -430,7 +430,9 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
   - toda promoção vira uma decisão rastreável, inclusive as forçadas;
   - **limitação:** as métricas são calculadas pelo próprio código do cientista. Mesmos
     dados e mesma seed não garantem a mesma metodologia de avaliação: o candidato pode
-    mudar o split ou calcular a métrica em outro conjunto. A solução é a ferramenta
+    mudar o split ou calcular a métrica em outro conjunto. O exemplo e o template fixam o
+    split (`SPLIT_SEED`, separado da `seed` do modelo), mas isso é convenção do código do
+    cientista, não garantia, por isso a condição de mesma seed continua. A solução é a ferramenta
     avaliar champion e candidato no mesmo holdout fixo (em "Com mais tempo");
   - métrica offline melhor não garante desempenho melhor em produção; por isso o
     desenho inclui shadow e canary antes da troca definitiva;

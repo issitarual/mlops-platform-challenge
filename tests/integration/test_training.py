@@ -134,7 +134,8 @@ def test_example_trains_registers_and_promotes(tmp_path: Path) -> None:
     outcome = services.training.train(project, data, {}, model_name=name)
 
     assert outcome.succeeded, outcome.issues
-    assert set(outcome.metrics) == {"rmse", "mae", "r2"}
+    assert set(outcome.metrics) == {"rmse", "baseline_rmse", "mae", "r2"}
+    assert outcome.metrics["rmse"] < outcome.metrics["baseline_rmse"]
     assert outcome.serialization == "skops"
     manifest = json.loads((outcome.run_dir / "manifest.json").read_text())
     assert manifest["model"]["files"]["MLmodel"]

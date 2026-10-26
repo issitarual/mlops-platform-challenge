@@ -219,6 +219,16 @@ def test_a_model_that_claims_cloudpickle_without_the_operators_flag_is_not_serve
     assert spec.allow_pickle is False
 
 
+def test_runs_without_the_allow_pickle_tag_are_never_served_with_pickle(tmp_path: Path) -> None:
+    world = World(tmp_path, allow_pickle=True)
+    tags = world.runs.runs[world.version.run_id]["tags"]
+    tags[SERIALIZATION_TAG] = "cloudpickle"
+    del tags[ALLOW_PICKLE_TAG]  # a run recorded before the tag existed
+    world.serving().prepare(world.project, "demo", "champion")
+    ((spec, _),) = world.runtime.serving_specs
+    assert spec.allow_pickle is False
+
+
 def test_the_platform_can_forbid_pickle_at_serve_time_even_for_an_allowed_run(
     tmp_path: Path,
 ) -> None:

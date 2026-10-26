@@ -193,12 +193,15 @@ alternativas, implementou e revisou. As alternativas eram verificadas e revisada
   grava a tag `mlship.allow_pickle` a partir da flag, o treino sem flag recusa serialização
   diferente de skops, e o serving só libera pickle com a tag, a plataforma ligada e a
   serialização registrada. A opção `serve --allow-pickle` explícita ficou em "Com mais
-  tempo", por decisão da Laura. Três testes novos cobrem o caso (resultado forjado,
-  plataforma desligada, tag ausente). Rodei unitários, mypy e ruff, mas não o e2e com Docker.
+  tempo", por decisão da Laura. Quatro testes novos cobrem o caso (resultado forjado
+  no treino, resultado permitido com a flag, tag `false` no serving e plataforma desligada);
+  a revisão seguinte notou que nenhum cobria a tag ausente, e acrescentei esse. Rodei unitários, mypy e ruff, mas não o e2e com Docker.
 - **Achados da mesma revisão que rebaixei ou ajustei.** O vetor de `.pth` (dependência que
-  executa código antes da política de carga) é real, mas uma dependência maliciosa já
-  executa código no `import`; recusar `.pth` quebraria pacotes legítimos, então virou
-  registro no ADR-017, não código. O ADR-017 também afirmava que o serving não tem rede e
+  executa código antes da política de carga) é real, e minha justificativa inicial era
+  frágil: dizer que uma dependência maliciosa "já executa código no `import`" não vale para o
+  caminho skops do serving, porque o `.pth` roda sem import (apontado na revisão seguinte).
+  Recusar `.pth` quebraria pacotes legítimos e é decisão de allowlist, então virou registro
+  no ADR-017, não código. O ADR-017 também afirmava que o serving não tem rede e
   que o `serve` avisa de modelos pickle, e nenhuma das duas coisas é verdade: corrigi o
   texto. O split do exemplo e do template dependia da seed do modelo; agora é fixo
   (`SPLIT_SEED`), com um baseline de média.
