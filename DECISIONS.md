@@ -1305,7 +1305,7 @@ Itens fora do escopo do código; todos aparecem no desenho de arquitetura:
 | D3 | 23/10 | ≈ 8–9 | E1 (lock e imagem) e E2 (treino isolado), revisão |
 | D4 | 24/10 | ≈ 8–10 | E3 (lineage e registro), revisão, testes no Windows, E4 (serving), revisão, E5 (validação e `init`) |
 | D5 | 25/10 | ≈ 8–9 | Revisão do E5, E6 (testes ponta a ponta e CI), E7 (carga, painel, drift e alertas) |
-| D6 | 26/10 | ≈ 6 até agora | E7: testes no Windows, medição de carga, correções (threads do serving, amostra do teste de carga, painel), arquitetura |
+| D6 | 26/10 | ≈ 6 | E7: testes no Windows, medição de carga, correções (threads do serving, amostra do teste de carga, painel), arquitetura |
 
 Horas estimadas, não cronometradas: partem das janelas de commits de cada dia e da duração
 das sessões de trabalho com a IA, e incluem os testes na minha máquina. Servem de ordem de
