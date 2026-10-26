@@ -1181,6 +1181,12 @@ Itens fora do escopo do código; todos aparecem no desenho de arquitetura:
 - Limite de predições simultâneas por worker, com 429 acima dele (backpressure; ADR-020).
 - Drift de features categóricas (frequência por categoria) e de predições, além das
   numéricas; alerta enviado (Alertmanager) em vez de só exibido (ADR-016).
+- Painel de operação mais completo (ADR-016): hoje são 8 painéis, só da rota `/v1/predict`.
+  Com mais tempo: linhas por camada (SLO e orçamento de erro, tráfego por rota incluindo o
+  lote, latência p50/p95/p99 por rota, rejeições 4xx e 429, drift por feature e das
+  predições, saturação com requisições em andamento, CPU e memória do container, e modelo
+  servido com versão e hash dos dados), alertas de queima do orçamento em duas janelas e o
+  painel gerado como código em vez de JSON escrito à mão. Exige novas métricas na API.
 - Saída SARIF no `validate`, para anotar os problemas direto no PR do GitHub (ADR-021).
 - Avaliação feita pela ferramenta: champion e candidato avaliados no mesmo holdout fixo,
   para que o gate de promoção não dependa de métricas calculadas pelo código do
@@ -1195,7 +1201,7 @@ Itens fora do escopo do código; todos aparecem no desenho de arquitetura:
 | D3 | 23/10 | ≈ 8–9 | E1 (lock e imagem) e E2 (treino isolado), revisão |
 | D4 | 24/10 | ≈ 8–10 | E3 (lineage e registro), revisão, testes no Windows, E4 (serving), revisão, E5 (validação e `init`) |
 | D5 | 25/10 | ≈ 8–9 | Revisão do E5, E6 (testes ponta a ponta e CI), E7 (carga, painel, drift e alertas) |
-| D6 | 26/10 | ≈ 2 até agora | E7: testes no Windows, medição de carga, correções (threads do serving, amostra do teste de carga, painel) |
+| D6 | 26/10 | ≈ 6 até agora | E7: testes no Windows, medição de carga, correções (threads do serving, amostra do teste de carga, painel), arquitetura |
 
 Horas estimadas, não cronometradas: partem das janelas de commits de cada dia e da duração
 das sessões de trabalho com a IA, e incluem os testes na minha máquina. Servem de ordem de
