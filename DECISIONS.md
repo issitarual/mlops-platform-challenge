@@ -29,6 +29,7 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
 | [020](#adr-020--serving-da-versão-promovida) | Serving da versão promovida | Aceita |
 | [021](#adr-021--validação-do-projeto-lock-e-init) | Validação do projeto, lock e `init` | Aceita |
 | [022](#adr-022--estratégia-de-testes-e-ci) | Estratégia de testes e CI | Aceita |
+| [023](#adr-023--arquitetura-de-produção-na-aws) | Arquitetura de produção na AWS | Proposta de desenho (não implantada) |
 
 ---
 
@@ -1151,6 +1152,59 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
   - **a observar:** o `uv` fixado em `required-version` pode fazer o Dependabot recusar
     o lock se ele usar outra versão; se acontecer, a faixa vira `>=0.13.5,<0.14`.
 
+### ADR-023 — Arquitetura de produção na AWS
+
+- **Contexto:**
+  - o guia pede, como diferencial, um desenho de como a solução funcionaria em produção,
+    de preferência na AWS, mostrando onde rodam treino e inferência, onde ficam código,
+    dados, artefatos e métricas e como o cientista interage com tudo;
+  - o desenho é de referência: **não foi implantado nem testado**, e o que depende da
+    documentação da AWS e não foi conferido está marcado em `docs/architecture/`;
+  - três visões separam o que existe do que não existe: (1) hoje, implementado e testado;
+    (2) com mais tempo, desenho sem código; (3) AWS.
+- **Decisão:** cada componente local tem um par gerenciado, e o contrato do cientista
+  (`train.py` + `requirements.txt`, alias `champion`) não muda.
+  - **orquestração do treino:** Step Functions disparando o job de treino com isolamento
+    de rede do SageMaker;
+  - **inferência online:** SageMaker Endpoint com a **mesma imagem** do serving local
+    (ADR-007), que mantém o paralelo entre treino e serving (ADR-005);
+  - **MLflow:** o MLflow gerenciado do SageMaker, mantendo o alias como contrato de consumo;
+  - **drift:** Model Monitor para o lote e o PSI da API para o alerta rápido (ADR-016);
+  - **feature store:** SageMaker Feature Store, só no desenho (ADR-014 continua valendo no código);
+  - **ambientes:** uma conta por ambiente (dev, QA, prod) e uma conta de ferramentas;
+  - **onde treinar:** na conta que detém o dado real, promovendo o **mesmo artefato** por
+    alias, sem retreinar por ambiente;
+  - **formato dos diagramas:** imagens SVG por passo, geradas de fontes draw.io (decisão
+    que mudou durante o trabalho: começou em Mermaid e ficou ilegível com muitos nós).
+- **Alternativas descartadas:**
+  - orquestração: SageMaker Pipelines (nativo de ML, mas mais acoplado ao SageMaker) e
+    MWAA/Airflow (poderoso, mas pesado e caro para este caso);
+  - inferência: ECS Fargate (aceita a mesma imagem sem adaptação, mas canary e shadow
+    viram trabalho próprio) e EKS (flexível, com custo operacional alto para um squad pequeno);
+  - MLflow: servidor próprio em ECS e RDS (controle total da versão, mas banco e servidor
+    para operar) e o Model Registry nativo sem MLflow (perde o contrato atual);
+  - drift: só Model Monitor (menos código, alerta mais lento) ou só PSI na API (já existe,
+    sem histórico gerenciado);
+  - feature store: Feast sobre S3 e DynamoDB (portável, mais operação) ou nenhuma por ora
+    (o skew de features fica por conta do cientista);
+  - ambientes: uma conta com recursos separados por prefixo e tag (mais simples, isolamento
+    fraco e raio de dano maior) ou só prod separada (QA sem isolamento);
+  - treino: treinar em dev com amostra e retreinar em prod (custo dobrado e modelo
+    diferente do testado) ou numa conta central com acesso cruzado ao dado (raio de dano
+    maior).
+- **Consequências:**
+  - **o que não foi verificado:** o MLflow gerenciado que conferi no blog da AWS (dezembro
+    de 2025) está na versão 3.4, anterior à usada localmente (3.17.2), então o contrato de
+    API precisa ser testado antes de assumir compatibilidade; o suporte a VPC e a relação
+    entre o alias e o SageMaker Model Registry também não foram verificados;
+  - a separação em contas de dev, QA e prod é uma premissa de desenho: depende da política
+    de dados e de contas da OLX, que não conheço;
+  - as escolhas de orquestração e de inferência são avaliações minhas de acoplamento e de
+    custo operacional, **não medidas**; o painel pode, com razão, preferir outra;
+  - nenhum custo em dólares foi estimado: depende de região, instância e volume.
+
+---
+
 ---
 
 ## Fora de escopo
@@ -1164,7 +1218,7 @@ Itens fora do escopo do código; todos aparecem no desenho de arquitetura:
 - monitoramento de qualidade com rótulos atrasados;
 - inferência em lote implementada;
 - canary e shadow deploy (no desenho);
-- gate de promoção offline (decisão no ADR-013, não implementado; ver "Com mais tempo");
+- gate de promoção offline (decisão no ADR-013, não implementado; fica como recomendação, ver "Com mais tempo");
 - feature store implementada;
 - assinatura criptográfica de artefatos;
 - sandbox de kernel (gVisor, Firecracker).
@@ -1200,6 +1254,11 @@ Itens fora do escopo do código; todos aparecem no desenho de arquitetura:
 - Avaliação feita pela ferramenta: champion e candidato avaliados no mesmo holdout fixo,
   para que o gate de promoção não dependa de métricas calculadas pelo código do
   cientista (ADR-013).
+- Região única na versão base: recuperação de desastre entre regiões (replicação do S3 e
+  do ECR) como evolução (ADR-023).
+- Decisão de promover em produção: gate automático mais aprovação humana, em vez de
+  totalmente automático (rápido, mais arriscado) ou totalmente manual (lento, sem rastro).
+  Depende do gate de promoção, que não existe hoje (ADR-013, ADR-023).
 
 ## Tempo gasto
 

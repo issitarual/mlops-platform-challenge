@@ -173,6 +173,17 @@ alternativas, implementou e revisou. As alternativas eram verificadas e revisada
   O ADR-013 agora diz que o gate não foi implementado e o item foi para "Com mais tempo".
   Lição: documentação de estado atual se confere no código, não no plano.
 
+- **Mermaid, diagramas emaranhados e badges de passo (E8).** O primeiro desenho da AWS foi
+  em Mermaid. Com `direction` aninhado em subgrafos, as setas colapsaram para a borda do
+  subgrafo, e o diagrama 3 virou um emaranhado de nós. A IA simplificou duas vezes antes de
+  concluir que o formato era o problema, e a troca para diagramas por passo no estilo
+  draw.io (um passo por imagem) foi proposta por mim, a partir do artigo do Jarvis da OLX.
+  Depois, o selo "STEP N" ficou longe do conteúdo, os diagramas não se identificavam e um
+  cartão de CI estava no passo errado; vi cada imagem e pedi o ajuste. 
+- **Batch Transform some na conversão (E8).** Ao converter o diagrama da AWS em passos, a IA
+  deixou de fora o Batch Transform, que era a única inferência em lote do desenho. Notei na
+  revisão e o cartão voltou para o passo 4. O lote continua só no desenho.
+
 ### Achados em que a IA ajudou a diagnosticar
 
 - **Imagem corrompida com o disco cheio.** O treino morria com `SIGBUS` e sem log. A IA
