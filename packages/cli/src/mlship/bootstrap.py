@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from mlship.adapters.docker_runtime import DockerRuntime
 from mlship.adapters.dockerfile import EnvironmentDockerfile
 from mlship.adapters.hashing import Sha256Hasher
+from mlship.adapters.http_probe import UrllibProbe
 from mlship.adapters.project_template import PackagedProjectTemplate
 from mlship.adapters.runtime_packager import WorkspaceRuntimePackager
 from mlship.adapters.tool_info import GitToolInfo
@@ -96,7 +97,9 @@ def build_services(settings: Settings) -> Services:
                 ),
                 model_max_bytes=settings.model_max_bytes,
                 model_max_files=settings.model_max_files,
+                dashboard_url=settings.dashboard_url,
             ),
+            UrllibProbe(),
         ),
     )
 

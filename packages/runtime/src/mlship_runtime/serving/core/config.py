@@ -6,7 +6,7 @@ the model directory can change them.
 
 from pathlib import Path
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,3 +26,11 @@ class ServingSettings(BaseSettings):
     api_key: SecretStr | None = None
     prediction_log_sample_rate: float = Field(default=0.0, ge=0.0, le=1.0)
     prediction_log_exclude_columns: list[str] = []
+    drift_window_rows: int = Field(default=1_000, gt=0)
+    drift_min_rows: int = Field(default=200, gt=0)
+
+    @model_validator(mode="after")
+    def _window_holds_the_minimum(self) -> "ServingSettings":
+        if self.drift_min_rows > self.drift_window_rows:
+            raise ValueError("drift_min_rows cannot exceed drift_window_rows")
+        return self

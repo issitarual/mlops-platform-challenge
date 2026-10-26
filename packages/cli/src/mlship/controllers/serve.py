@@ -14,6 +14,7 @@ from mlship.controllers import presenters
 from mlship.controllers.context import load_services
 from mlship.domain.errors import MlshipError
 from mlship.domain.runs import resolve_model_name
+from mlship.domain.serving import SERVING_DEFAULT_PORT
 
 _FORWARDED = (
     "MLSHIP_SERVING_API_KEY",
@@ -22,6 +23,8 @@ _FORWARDED = (
     "MLSHIP_SERVING_REQUEST_TIMEOUT_SECONDS",
     "MLSHIP_SERVING_PREDICTION_LOG_SAMPLE_RATE",
     "MLSHIP_SERVING_PREDICTION_LOG_EXCLUDE_COLUMNS",
+    "MLSHIP_SERVING_DRIFT_WINDOW_ROWS",
+    "MLSHIP_SERVING_DRIFT_MIN_ROWS",
 )
 
 
@@ -45,7 +48,9 @@ def _stop_like_ctrl_c() -> Iterator[None]:
 
 def command(
     alias: Annotated[str, typer.Option(help="Model alias to serve.")] = "champion",
-    port: Annotated[int, typer.Option(min=1, max=65535, help="Local port (127.0.0.1).")] = 8080,
+    port: Annotated[
+        int, typer.Option(min=1, max=65535, help="Local port (127.0.0.1).")
+    ] = SERVING_DEFAULT_PORT,
     workers: Annotated[int, typer.Option(min=1, max=32, help="API worker processes.")] = 1,
     project: Annotated[Path, typer.Option(help="Project directory.")] = Path(),
     model_name: Annotated[
@@ -64,6 +69,7 @@ def command(
             presenters.serving_started(name, alias)
             prepared = services.serving.prepare(project.resolve(), name, alias)
             presenters.serving_prepared(prepared)
+            presenters.serving_dashboard(services.serving.dashboard())
             services.serving.run(
                 prepared,
                 port=port,

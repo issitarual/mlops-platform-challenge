@@ -33,10 +33,36 @@ class FakeImages:
         return FakeImage(), []
 
 
+class FakeNetwork:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.connected: list[tuple[Any, list[str]]] = []
+
+    def connect(self, container: Any, aliases: list[str]) -> None:
+        if self.error is not None:
+            raise self.error
+        self.connected.append((container, aliases))
+
+
+class FakeNetworks:
+    def __init__(self, network: FakeNetwork | None = None) -> None:
+        self.network = network
+        self.names: list[str] = []
+
+    def get(self, name: str) -> FakeNetwork:
+        self.names.append(name)
+        if self.network is None:
+            raise docker.errors.NotFound("no such network")
+        return self.network
+
+
 class FakeClient:
-    def __init__(self, images: FakeImages, containers: Any = None) -> None:
+    def __init__(
+        self, images: FakeImages, containers: Any = None, networks: FakeNetworks | None = None
+    ) -> None:
         self.images = images
         self.containers = containers
+        self.networks = networks or FakeNetworks()
 
     def ping(self) -> bool:
         return True
@@ -96,8 +122,10 @@ class FakeContainer:
         self.attrs: dict[str, Any] = {"State": {"ExitCode": exit_code, "OOMKilled": False}}
         self.killed = False
         self.removed = False
+        self.started = False
 
     def start(self) -> None:
+        self.started = True
         self.status = "running"
 
     def logs(self, stream: bool = False, follow: bool = False) -> Any:
@@ -154,10 +182,12 @@ def _spec(tmp_path: Path, timeout: int = 60) -> TrainingJobSpec:
 
 
 def _training_runtime(
-    container: FakeContainer, create_error: Exception | None = None
+    container: FakeContainer,
+    create_error: Exception | None = None,
+    networks: FakeNetworks | None = None,
 ) -> tuple[DockerRuntime, FakeContainers]:
     containers = FakeContainers(container, create_error)
-    client = FakeClient(FakeImages(), containers)
+    client = FakeClient(FakeImages(), containers, networks)
     return DockerRuntime("linux/amd64", client_factory=lambda: client), containers
 
 
@@ -328,3 +358,28 @@ def test_cleanup_errors_never_hide_the_original_error(monkeypatch: pytest.Monkey
     runtime, _ = _training_runtime(container)
     with pytest.raises(ContainerRunError, match="before it was ready"):
         runtime.run_serving(_serving_spec(), lambda _: None, lambda _: None)
+
+
+def test_the_api_joins_the_monitoring_network_only_when_it_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(docker_runtime, "_answers_ready", lambda _: True)
+    for network in (FakeNetwork(), None):
+        container = FakeContainer(["running", "exited"])
+        networks = FakeNetworks(network)
+        runtime, _ = _training_runtime(container, networks=networks)
+        with pytest.raises(ContainerRunError, match="while serving"):
+            runtime.run_serving(_serving_spec(), lambda _: None, lambda _: None)
+        assert networks.names == ["mlship-serving"] and container.started
+        if network is not None:
+            assert network.connected == [(container, ["mlship-api"])]
+
+
+def test_a_broken_monitoring_network_is_a_clear_error_and_leaves_nothing_running() -> None:
+    container = FakeContainer(["running"])
+    networks = FakeNetworks(FakeNetwork(docker.errors.APIError("endpoint exists")))
+    runtime, _ = _training_runtime(container, networks=networks)
+    with pytest.raises(ContainerRunError, match="monitoring network") as info:
+        runtime.run_serving(_serving_spec(), lambda _: None, lambda _: None)
+    assert "--profile monitoring" in info.value.hint
+    assert not container.started and container.removed

@@ -1,0 +1,36 @@
+# Alert rules evaluated by Prometheus (Status > Alerts at http://127.0.0.1:9090/alerts).
+# Locally they are shown, not sent; production routes them through Alertmanager or
+# CloudWatch alarms to the on-call channel and, for drift, to the retraining pipeline.
+groups:
+  - name: mlship-serving
+    rules:
+      - alert: FeatureDrift
+        # PSI above 0.2 is the usual threshold for a significant shift (ADR-016).
+        expr: max by (feature) (mlship_feature_drift_psi) > 0.2
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Drift in feature {{ $labels.feature }} (PSI {{ $value | printf \"%.2f\" }})"
+          description: >-
+            Recent requests no longer look like the training data for this feature.
+            Check the input pipeline first; if the shift is real, retrain and promote
+            through the gate (ADR-013).
+      - alert: HighErrorRate
+        expr: >-
+          sum(rate(mlship_http_requests_total{route="/v1/predict",status=~"5.."}[5m]))
+          / sum(rate(mlship_http_requests_total{route="/v1/predict"}[5m])) > 0.01
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "More than 1% of predictions fail with 5xx"
+      - alert: HighLatencyP95
+        expr: >-
+          histogram_quantile(0.95, sum by (le)
+          (rate(mlship_http_request_duration_seconds_bucket{route="/v1/predict"}[5m]))) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 latency of /v1/predict above 500 ms"

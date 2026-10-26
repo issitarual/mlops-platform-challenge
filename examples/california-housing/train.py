@@ -46,4 +46,9 @@ def train(data_dir: Path, params: dict[str, Any]) -> TrainOutput:
         "mae": float(mean_absolute_error(y_test, predictions)),
         "r2": float(r2_score(y_test, predictions)),
     }
-    return TrainOutput(model=model, metrics=metrics, input_example=x_test.head(5))
+    return TrainOutput(
+        model=model,
+        metrics=metrics,
+        input_example=x_test.head(5),
+        reference_data=x_train,  # baseline for drift monitoring in serving
+    )

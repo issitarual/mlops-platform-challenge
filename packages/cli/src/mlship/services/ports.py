@@ -71,6 +71,12 @@ class ProjectTemplate(Protocol):
         ...
 
 
+class HttpProbe(Protocol):
+    def answers(self, url: str) -> bool:
+        """True when ``url`` answers HTTP 200 quickly; never raises."""
+        ...
+
+
 class ContentHasher(Protocol):
     def file(self, path: Path) -> str: ...
 

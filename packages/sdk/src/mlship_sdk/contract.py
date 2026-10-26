@@ -19,8 +19,13 @@ class TrainOutput:
         metrics: Evaluation metrics, name -> finite number (e.g. ``{"rmse": 0.51}``).
         input_example: A few rows of model input. Used to infer the API schema and
             to smoke-test the model right after training.
+        reference_data: Optional. The training features (e.g. ``x_train``), as a
+            pandas DataFrame with the same columns as ``input_example``. Only summary
+            statistics are kept: they are the baseline serving compares requests with
+            to detect drift. Without it, drift monitoring is off for the model.
     """
 
     model: Any
     metrics: Mapping[str, float]
     input_example: Any
+    reference_data: Any = None

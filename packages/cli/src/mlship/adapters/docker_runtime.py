@@ -26,7 +26,13 @@ import docker.errors
 from mlship.adapters.dockerfile import render_serving_dockerfile
 from mlship.domain.environment import ImageRef
 from mlship.domain.errors import ContainerRunError, EnvironmentBuildError, ToolNotFoundError
-from mlship.domain.serving import SERVING_PORT, ServingImageSpec, ServingJobSpec
+from mlship.domain.serving import (
+    MONITORING_ALIAS,
+    MONITORING_NETWORK,
+    SERVING_PORT,
+    ServingImageSpec,
+    ServingJobSpec,
+)
 from mlship.domain.training import (
     CONFIG_MOUNT,
     CONTAINER_TMP,
@@ -248,6 +254,24 @@ class DockerRuntime:
             )
             return self.build_image(context, tag, labels)
 
+    def _join_monitoring(self, container: Any) -> None:
+        """Lets Prometheus find the API by DNS when the monitoring stack is up (ADR-016).
+
+        Only Prometheus shares that network: the API reaches neither MLflow nor Grafana.
+        Without the network, serving works the same, just unscraped.
+        """
+        try:
+            network = self._docker().networks.get(MONITORING_NETWORK)
+            network.connect(container, aliases=[MONITORING_ALIAS])
+        except docker.errors.NotFound:
+            return
+        except docker.errors.APIError as exc:
+            raise ContainerRunError(
+                "Docker could not attach the API to the monitoring network.",
+                hint="Restart the stack: docker compose --profile monitoring up -d",
+                details=str(exc),
+            ) from exc
+
     def run_serving(
         self,
         spec: ServingJobSpec,
@@ -293,6 +317,7 @@ class DockerRuntime:
         url = f"http://127.0.0.1:{spec.host_port}"
         ready = False
         try:
+            self._join_monitoring(container)
             try:
                 container.start()
             except docker.errors.APIError as exc:

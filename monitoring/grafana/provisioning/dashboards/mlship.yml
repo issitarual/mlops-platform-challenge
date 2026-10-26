@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: mlship
+    type: file
+    allowUiUpdates: false  # the dashboard is versioned in the repository
+    options:
+      path: /var/lib/grafana/dashboards

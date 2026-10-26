@@ -43,6 +43,7 @@ def build_router(request_model: type[BaseModel], timeout_seconds: float) -> APIR
                 detail=f"Prediction took longer than {timeout_seconds}s.",
             ) from exc
         metrics.PREDICTED_ROWS.inc(len(rows))
+        metrics.record_drift(service.drift_scores())
         return PredictionResponse(
             model=ModelInfo(name=service.model_name, version=service.model_version),
             predictions=predictions,

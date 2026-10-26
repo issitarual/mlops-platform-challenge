@@ -7,14 +7,16 @@ import time
 import traceback
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+from mlship_runtime import reference
 from mlship_runtime.runner.config import RunConfig, load_config
 from mlship_runtime.runner.issues import Issue, RunnerError
 from mlship_runtime.runner.loader import load_train_function
 from mlship_runtime.runner.output_validation import validate_train_output
 from mlship_runtime.runner.seeds import set_global_seeds
 from mlship_runtime.runner.writer import SavedModel, save_model, write_json
+from mlship_sdk import TrainOutput
 
 RESULT_SCHEMA_VERSION = 1
 DEFAULT_OUTPUT = Path("/output")
@@ -46,6 +48,29 @@ def _result(
     }
 
 
+_REFERENCE_HINT = (
+    "reference_data is optional: it is the baseline for drift monitoring. Pass the "
+    "training features (e.g. reference_data=x_train) or leave it out."
+)
+
+
+def _reference(output: TrainOutput) -> reference.Reference | None:
+    if output.reference_data is None:
+        print(
+            "mlship runner: no reference_data, so drift monitoring will be off for this model",
+            file=sys.stderr,
+        )
+        return None
+    columns = [str(c) for c in getattr(output.input_example, "columns", [])]
+    baseline = reference.compute(output.reference_data, columns)
+    print(
+        f"mlship runner: drift baseline for {len(baseline.features)} feature(s), "
+        f"{baseline.rows} rows",
+        file=sys.stderr,
+    )
+    return baseline
+
+
 def run(config: RunConfig, started: float) -> dict[str, Any]:
     set_global_seeds(config.seed)
     try:
@@ -70,10 +95,15 @@ def run(config: RunConfig, started: float) -> dict[str, Any]:
     issues, predictions = validate_train_output(output)
     if issues:
         return _result(started, issues)
+    trained = cast(TrainOutput, output)  # validate_train_output checked the type
+    try:
+        baseline = _reference(trained)
+    except ValueError as exc:
+        return _result(started, [Issue("REFERENCE_DATA_INVALID", str(exc), _REFERENCE_HINT)])
     try:
         saved, save_issues = save_model(
-            output.model,  # type: ignore[attr-defined]
-            output.input_example,  # type: ignore[attr-defined]
+            trained.model,
+            trained.input_example,
             predictions,
             config.output_dir / "model",
             config.serialization,
@@ -91,7 +121,9 @@ def run(config: RunConfig, started: float) -> dict[str, Any]:
                 )
             ],
         )
-    metrics = {k: float(v) for k, v in output.metrics.items()}  # type: ignore[attr-defined]
+    if saved is not None and baseline is not None:
+        reference.save(baseline, config.output_dir / "model")
+    metrics = {k: float(v) for k, v in trained.metrics.items()}
     write_json(config.output_dir / "metrics.json", metrics)
     return _result(started, save_issues, metrics, saved)
 

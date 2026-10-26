@@ -15,18 +15,26 @@ from mlship.domain.environment import ImageRef
 from mlship.domain.errors import MlshipError, ModelIntegrityError, ModelNotFoundError
 from mlship.domain.runs import ModelVersion, tree_digest
 from mlship.domain.serving import (
+    SINGLE_THREAD_ENVIRONMENT,
     PreparedServing,
     ServingImageSpec,
     ServingJobSpec,
     ServingLimits,
 )
 from mlship.services.environment_service import EnvironmentService
-from mlship.services.ports import ContainerRuntime, ContentHasher, ModelRegistry, RunRepository
+from mlship.services.ports import (
+    ContainerRuntime,
+    ContentHasher,
+    HttpProbe,
+    ModelRegistry,
+    RunRepository,
+)
 from mlship.services.run_recorder import LOCK_ARTIFACT
 
 LOCK_SHA256_TAG = "mlship.lock_sha256"
 ENVIRONMENT_KEY_TAG = "mlship.environment_key"
 SERIALIZATION_TAG = "mlship.serialization"
+DASHBOARD_UID = "mlship-serving"
 _PICKLE_SERIALIZATION = "cloudpickle"
 
 
@@ -39,6 +47,7 @@ class ServingPolicy:
     model_max_bytes: int
     model_max_files: int
     cache_dirname: str = ".mlship/serving"
+    dashboard_url: str | None = None
 
 
 class ServingService:
@@ -50,13 +59,22 @@ class ServingService:
         container_runtime: ContainerRuntime,
         hasher: ContentHasher,
         policy: ServingPolicy,
+        probe: HttpProbe | None = None,
     ) -> None:
+        self._probe = probe
         self._runs = run_repository
         self._registry = registry
         self._environment = environment
         self._containers = container_runtime
         self._hasher = hasher
         self._policy = policy
+
+    def dashboard(self) -> str | None:
+        """The Grafana dashboard, when the monitoring stack is up (ADR-016)."""
+        base = self._policy.dashboard_url
+        if not base or self._probe is None or not self._probe.answers(f"{base}/api/health"):
+            return None
+        return f"{base}/d/{DASHBOARD_UID}"
 
     def prepare(self, project_dir: Path, model_name: str, alias: str) -> PreparedServing:
         self._runs.check_available()
@@ -101,7 +119,7 @@ class ServingService:
                 model=prepared.model,
                 host_port=port,
                 workers=workers,
-                environment=environment,
+                environment={**SINGLE_THREAD_ENVIRONMENT, **environment},
                 limits=self._policy.limits,
             ),
             on_log,

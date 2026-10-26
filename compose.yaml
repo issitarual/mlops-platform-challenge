@@ -32,5 +32,51 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  # Monitoring of `mlship serve` (ADR-016): docker compose --profile monitoring up -d
+  # Production equivalent: see docs/architecture.
+  prometheus:
+    profiles: ["monitoring"]
+    # Pinned by the digest of the multi-arch index (docker buildx imagetools inspect, 26/10).
+    image: prom/prometheus:v3.14.0@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=2d
+    networks: [default, serving]
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+    restart: unless-stopped
+
+  grafana:
+    profiles: ["monitoring"]
+    # Pinned by the digest of the multi-arch index (docker buildx imagetools inspect, 26/10).
+    image: grafana/grafana:13.2.2@sha256:ac461fb352abc50da10a51c7d02462e9c05488f11f53f14b3ad79a8145f638a0
+    depends_on: [prometheus]
+    environment:
+      # Read-only and local: anonymous viewers, no login, nothing to edit or leak.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_AUTH_BASIC_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/mlship-serving.json
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    restart: unless-stopped
+
+networks:
+  # `mlship serve` attaches each API here (alias mlship-api). Only Prometheus joins it,
+  # so the API, which runs the scientist's model, shares no network with MLflow or Grafana.
+  serving:
+    name: mlship-serving
+
 volumes:
   mlflow-data:

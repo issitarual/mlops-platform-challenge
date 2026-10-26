@@ -247,9 +247,20 @@ def serving_log(text: str) -> None:
     err_console.out(text, end="", style="dim", highlight=False)
 
 
+def serving_dashboard(url: str | None) -> None:
+    if url is None:
+        console.print(
+            "[dim]Dashboard and alerts: docker compose --profile monitoring up -d[/dim]",
+            highlight=False,
+        )
+        return
+    console.print(f"Dashboard: {url}", highlight=False)
+
+
 def serving_ready(url: str) -> None:
     console.print(
-        f"\n[green]Ready[/green]: {url}/v1/predict  ·  docs {url}/docs  ·  metrics {url}/metrics"
+        f"\n[green]Ready[/green]: docs {url}/docs  ·  metrics {url}/metrics"
+        f"\nPredict: POST {url}/v1/predict"
         "\nPress Ctrl+C to stop.\n",
         highlight=False,
     )

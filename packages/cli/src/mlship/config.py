@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     serve_cpu_limit: float = Field(default=2.0, gt=0)
     serve_memory_limit: str = "2g"
     serve_pids_limit: int = Field(default=256, gt=0)
+    dashboard_url: str = "http://127.0.0.1:3000"  # Grafana from compose (--profile monitoring)
 
     @model_validator(mode="after")
     def _target_is_consistent(self) -> Self:
