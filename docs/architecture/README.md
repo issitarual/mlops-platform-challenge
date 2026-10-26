@@ -49,7 +49,7 @@ onde só o Prometheus entra.
 | Métricas | Parâmetros e métricas no MLflow; métricas operacionais no Prometheus |
 | Treino | Container isolado, uma execução por comando (ADR-018) |
 | Inferência online | FastAPI, modelo carregado uma vez, predição fora do event loop (ADR-020) |
-| Inferência em lote | Endpoint de lote vetorizado; job de lote separado é desenho |
+| Inferência em lote | `/v1/predict` aceita várias linhas por requisição (até 1000, predição vetorizada); job de lote separado é desenho |
 | Registry | MLflow Registry, alias explícito `champion` (ADR-019) |
 | Feature store | Não implementada; só desenho |
 | CI/CD | GitHub Actions até o e2e; sem deploy (não há ambiente) |
@@ -63,7 +63,7 @@ onde só o Prometheus entra.
 - Docker comum compartilha o kernel do host: o isolamento é de container, não de máquina virtual (ADR-018).
 - Um único host, sem alta disponibilidade, sem autoscaling, sem controle de acesso entre usuários.
 - O painel de operação cobre só a rota `/v1/predict` (não o lote) e não mostra saturação nem orçamento de erro (ADR-016).
-- O gate de promoção usa métricas calculadas pelo próprio código do cientista (ADR-013).
+- Não há gate de promoção: o `promote` move o alias sem comparar métricas e só registra quem promoveu, quando e o que substituiu (ADR-013 descreve o gate, ainda não implementado).
 - Os dados não são copiados: se o diretório mudar, o hash muda, mas o conteúdo antigo se perde (ADR-014).
 
 ---
@@ -97,11 +97,12 @@ uma máquina ou em um servidor de CI, sem depender da AWS.
 | Drift categórico e de predição, Alertmanager | Hoje só numéricas, e o alerta apenas aparece no Prometheus | 016 |
 | Dashboards por camada (SLO, rotas, rejeições, saturação, drift, modelo) | Painel atual tem 8 painéis e cobre só `/v1/predict`: o lote, a saturação e o orçamento de erro não aparecem | 016 |
 | Saída SARIF no `validate` | Problemas não aparecem anotados no PR | 021 |
-| Avaliação em holdout fixo pela ferramenta | O gate confia em métricas do código do cientista | 013 |
+| Gate de promoção offline | Hoje o `promote` move o alias sem comparar nada | 013 |
+| Avaliação em holdout fixo pela ferramenta | Sem ela, a métrica do gate viria do código do cientista | 013 |
 
 ### Ordem sugerida, se houvesse mais tempo
 
-1. Avaliação em holdout e gate (fecha a maior lacuna de governança).
+1. Gate de promoção com avaliação em holdout (fecha a maior lacuna de governança).
 2. Snapshot de dados (fecha a lacuna de reprodutibilidade).
 3. Backpressure, Alertmanager e dashboards por camada (operação).
 4. Formatos nativos e distroless (superfície de ataque).
@@ -154,7 +155,7 @@ anonimizada.
 | Registry com alias `champion` | MLflow Registry; espelho opcional no SageMaker Model Registry | Alias continua sendo o contrato de consumo |
 | Diretório de dados com hash | S3 com versionamento + manifesto com URI, versão e hash | ADR-014; Delta ou Iceberg se precisar de time travel |
 | `serve` (container FastAPI) | SageMaker Endpoint com a mesma imagem | Ver decisão E8-3 |
-| `/v1/predict/batch` (online, várias linhas por requisição) | O mesmo endpoint; a inferência em lote offline é um job separado: Batch Transform ou Processing Job | Mesmo modelo e mesma imagem, outro perfil de custo; só no desenho |
+| `/v1/predict` com várias linhas (online, até 1000 por requisição) | O mesmo endpoint; a inferência em lote offline é um job separado: Batch Transform ou Processing Job | Mesmo modelo e mesma imagem, outro perfil de custo; só no desenho |
 | Prometheus + Grafana | Managed Prometheus + Managed Grafana, além do CloudWatch | Mesmos painéis e alertas, versionados |
 | PSI em janela na API | Model Monitor para o drift em lote e PSI online para o alerta rápido | Ver decisão E8-5 |
 | Alertas (regras) | CloudWatch Alarms + SNS + EventBridge | Alarme aciona o Step Functions |

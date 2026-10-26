@@ -163,6 +163,16 @@ alternativas, implementou e revisou. As alternativas eram verificadas e revisada
   o teste é que estava errado. Também saíram do mesmo print: painel de erro sem dado
   quando não há 5xx e "Model served" mostrando o valor `1` em vez do modelo.
 
+- **Funcionalidades descritas como prontas sem estar (E8 e E9).** Ao desenhar a arquitetura
+  "hoje" e ao escrever o README, a IA afirmou duas coisas que o código não tem: uma rota
+  `/v1/predict/batch` (só existe `/v1/predict`, com várias linhas por requisição) e um gate de
+  promoção que compara champion e candidato com `--force` (o `promote` só move o alias e
+  registra quem, quando e o que substituiu; o `TrainOutput` nem tem `primary_metric`). Ambas
+  vieram do plano e do ADR, não do código. A IA achou os dois ao conferir cada comando e cada
+  rota na CLI e no runtime antes de documentar, e corrigiu diagramas, README e DECISIONS.
+  O ADR-013 agora diz que o gate não foi implementado e o item foi para "Com mais tempo".
+  Lição: documentação de estado atual se confere no código, não no plano.
+
 ### Achados em que a IA ajudou a diagnosticar
 
 - **Imagem corrompida com o disco cheio.** O treino morria com `SIGBUS` e sem log. A IA

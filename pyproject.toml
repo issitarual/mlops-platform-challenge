@@ -48,6 +48,7 @@ ban-relative-imports = "all"
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S108"]  # asserts are the point; "/tmp" there is a container path
+"scripts/quickstart.py" = ["S603", "S607"]  # fixed argument lists, no shell; uv and docker come from PATH
 "loadtest/**" = ["S311"]  # picks rows to send, not secrets
 
 [tool.mypy]

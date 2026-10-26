@@ -19,7 +19,7 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
 | [010](#adr-010--dados-do-exemplo-verificados-por-hash) | Dados do exemplo verificados por hash | Aceita |
 | [011](#adr-011--limites-de-reprodutibilidade) | Limites de reprodutibilidade | Aceita |
 | [012](#adr-012--versões-das-ferramentas-fixadas) | Versões das ferramentas fixadas | Aceita |
-| [013](#adr-013--champion-e-challenger-com-gate-de-promoção) | Champion e challenger com gate de promoção | Aceita (implementação P2) |
+| [013](#adr-013--champion-e-challenger-com-gate-de-promoção) | Champion e challenger com gate de promoção | Aceita (gate não implementado; no desenho) |
 | [014](#adr-014--versionamento-de-dados-por-referência) | Versionamento de dados por referência | Aceita |
 | [015](#adr-015--versionamento-de-ponta-a-ponta-e-de-modelos) | Versionamento de ponta a ponta e de modelos | Aceita |
 | [016](#adr-016--observabilidade-do-serving-e-detecção-de-drift) | Observabilidade do serving e detecção de drift | Aceita |
@@ -385,6 +385,11 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
 - **Consequências:** atualizar o `uv` passa a ser uma mudança deliberada em um único lugar.
 
 ### ADR-013 — Champion e challenger com gate de promoção
+
+- **Status da implementação:** o gate **não foi implementado no prazo**. Hoje o `promote` move
+  o alias e registra quem promoveu, quando e a versão substituída, sem comparar métricas.
+  O `TrainOutput` ainda não tem `primary_metric` nem `direction`. O que segue é a decisão
+  e o que seria feito (ver "Com mais tempo").
 
 - **Contexto:**
   - mover o alias `champion` sem comparação permite que um modelo pior entre em
@@ -1158,7 +1163,8 @@ Itens fora do escopo do código; todos aparecem no desenho de arquitetura:
 - retreino automático (o alerta de drift está implementado; ADR-016);
 - monitoramento de qualidade com rótulos atrasados;
 - inferência em lote implementada;
-- canary e shadow deploy (no desenho; o gate offline está no ADR-013);
+- canary e shadow deploy (no desenho);
+- gate de promoção offline (decisão no ADR-013, não implementado; ver "Com mais tempo");
 - feature store implementada;
 - assinatura criptográfica de artefatos;
 - sandbox de kernel (gVisor, Firecracker).
@@ -1188,6 +1194,9 @@ Itens fora do escopo do código; todos aparecem no desenho de arquitetura:
   servido com versão e hash dos dados), alertas de queima do orçamento em duas janelas e o
   painel gerado como código em vez de JSON escrito à mão. Exige novas métricas na API.
 - Saída SARIF no `validate`, para anotar os problemas direto no PR do GitHub (ADR-021).
+- Gate de promoção offline (ADR-013): `promote --alias champion` compara com o champion
+  atual, só entre runs comparáveis (mesma métrica e direção, mesmo hash de dados e mesma
+  seed), com `--force` registrado; exige `primary_metric` e `direction` no `TrainOutput`.
 - Avaliação feita pela ferramenta: champion e candidato avaliados no mesmo holdout fixo,
   para que o gate de promoção não dependa de métricas calculadas pelo código do
   cientista (ADR-013).
