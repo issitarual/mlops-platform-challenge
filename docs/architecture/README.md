@@ -39,7 +39,7 @@ Tudo que aparece em **1** está implementado e testado; **2** e **3** são desen
 sobre a imagem de ambiente e sobe a API; ao subir, junta o container à rede `mlship-serving`,
 onde só o Prometheus entra.
 
-### Mapeamento do §6 do desafio, visão 1
+### Mapeamento dos temas do desafio, visão 1
 
 | Tema | Como está hoje |
 | --- | --- |

@@ -19,7 +19,7 @@ alternativas, implementou e revisou. As alternativas eram verificadas e revisada
   M3. A IA propôs; eu reordenei e cortei escopo.
 - **Decisões:** para cada escolha relevante, a IA apresentava 2 a 3 alternativas com
   prós, contras e o que o mercado usa, com uma recomendação. **A decisão era minha** e
-  ficou registrada no `DECISIONS.md` (ADR-001 a ADR-021).
+  ficou registrada no `DECISIONS.md` (ADR-001 a ADR-023).
 - **Implementação:** a IA escrevia numa cópia de trabalho, rodava lint, tipos e testes
   e só então copiava para a minha pasta. Eu revisava, rodava localmente e commitava.
 - **Revisão crítica:** ao fim de cada épico, pedi uma revisão "como Staff de MLOps",

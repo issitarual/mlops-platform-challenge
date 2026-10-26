@@ -45,6 +45,19 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
 | Exemplo | California Housing, regressão com scikit-learn |
 | Prazo | 7 dias corridos a partir de 21/10, com entrega planejada para 27/10 |
 
+## Requisitos em aberto e interpretação
+
+O enunciado deixa alguns pontos em aberto. Estas são as leituras adotadas e o porquê; as
+consequências de cada uma estão nos ADRs indicados.
+
+| Ponto do enunciado | Interpretação escolhida | Por quê |
+| --- | --- | --- |
+| "O cientista fornece **somente código Python**", mas o treino recebe "as dependências (pacotes)" | O cientista escreve só Python (`train.py`); o `requirements.txt` é a lista de pacotes que o próprio enunciado cita como entrada, ou seja, dado, não código. Não há Dockerfile, servidor, rota nem configuração de infraestrutura | Sem a lista de pacotes não há ambiente reproduzível. Alternativa descartada: inferir as dependências dos `import`s, que não fixa versões nem resolve nomes diferentes (`sklearn` e `scikit-learn`). Os `import`s sem pacote declarado geram aviso (ADR-002, ADR-021) |
+| "Treino **reprodutível**" | Mesmo ambiente (lock com hashes, imagem por digest), mesmas entradas (código, dados, parâmetros, seed) e mesmo comportamento do modelo; não garante bytes idênticos | Determinismo bit a bit depende de algoritmo e hardware (ADR-011) |
+| "Retorna os artefatos e as métricas" | Ficam registrados no MLflow e em disco (`manifest.json` por run), associados ao `run_id`; a CLI mostra o resumo, mas não devolve o modelo como arquivo | O enunciado exige que fiquem "salvos e associados à execução" (ADR-019) |
+| "O usuário fornece os dados" | Um diretório separado do projeto, informado em `--data`, montado somente leitura; o conteúdo é identificado por hash, sem cópia | O container não tem rede, então os dados precisam estar no disco antes do treino (ADR-010, ADR-014) |
+| "API REST de inferência" | Online, com um endpoint que aceita uma ou várias linhas por requisição; inferência em lote offline fica só no desenho | O foco pedido é a ferramenta, não uma plataforma completa (ADR-020, ADR-023) |
+
 ---
 
 ## ADRs
@@ -67,7 +80,7 @@ Status: **Aceita** (em vigor) ou **Proposta** (aguardando confirmação).
   metrics, input_example)` + `requirements.txt`. `TrainOutput` vem do `mlship-sdk`, sem
   dependências. O modelo precisa ter `.predict()`, com o pré-processamento dentro dele.
   Campos **opcionais** `primary_metric` e `direction` (`"minimize"` ou `"maximize"`)
-  habilitam o gate de promoção (ADR-013); entram no E3. Campo **opcional**
+  habilitam o gate de promoção (ADR-013); previstos, **não implementados**. Campo **opcional**
   `reference_data` (as features de treino) habilita o monitoramento de drift (ADR-016);
   entra no E7.
 - **Critério para o contrato:** só se pede o que a ferramenta não consegue inferir **e**
