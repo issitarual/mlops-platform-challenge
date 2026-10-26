@@ -312,10 +312,10 @@ from mlship_sdk import TrainOutput
 def train(data_dir: Path, params: dict) -> TrainOutput:
     ...
     return TrainOutput(
-        model=pipeline,                  # qualquer objeto com .predict(); pré-processamento dentro dele
-        metrics={"rmse": rmse},          # números finitos
-        input_example=x_test.head(5),    # gera o schema da API e o smoke test
-        reference_data=x_train,          # opcional: baseline para detectar drift no serving
+        model=pipeline,  # qualquer objeto com .predict(); pré-processamento dentro dele
+        metrics={"rmse": rmse},  # números finitos
+        input_example=x_test.head(5),  # gera o schema da API e o smoke test
+        reference_data=x_train,  # opcional: baseline para detectar drift no serving
     )
 ```
 
