@@ -37,7 +37,7 @@ services:
   prometheus:
     profiles: ["monitoring"]
     # Pinned by the digest of the multi-arch index (docker buildx imagetools inspect, 26/10).
-    image: prom/prometheus:v3.14.0@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0
+    image: prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=2d
@@ -52,7 +52,7 @@ services:
   grafana:
     profiles: ["monitoring"]
     # Pinned by the digest of the multi-arch index (docker buildx imagetools inspect, 26/10).
-    image: grafana/grafana:13.2.2@sha256:ac461fb352abc50da10a51c7d02462e9c05488f11f53f14b3ad79a8145f638a0
+    image: grafana/grafana:13.3.0@sha256:488984b716c0862639f91a698adbe2862677a5a07bad42da5f03f3030883b205
     depends_on: [prometheus]
     environment:
       # Read-only and local: anonymous viewers, no login, nothing to edit or leak.
